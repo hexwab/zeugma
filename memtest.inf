@@ -1,0 +1,25 @@
+!% $MAX_STATIC_DATA=50000
+Constant MAX=20000;
+Constant STRIDE1=100;
+Constant STRIDE2=1000;
+
+Array buf --> MAX;
+[ main i j k;
+  for (k=1,j=1000: j<=MAX: j=j+STRIDE2, k++) {
+    print "test ",k, ": testing ", j, " entries...";
+    for (i=0: i<j: i=i+STRIDE1) {
+      buf-->i = i+k;
+    }
+    print " write done...";
+    for (i=0: i<j: i=i+STRIDE1) {
+      if (buf-->i ~= i+k) {
+        print "read error ", i+k, " != ", buf-->i, "^";
+	for(::);
+      }
+     }
+    print " read done^";
+  }
+  print "all OK^";
+
+  quit;
+];

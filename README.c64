@@ -1,0 +1,24 @@
+This is the source code for Zeugma C64 REU version 1.2, a modern Z-machine
+interpreter for the 6502 processor family.
+
+http://www.linusakesson.net/software/zeugma/
+
+Zeugma was created by Linus Akesson.
+
+To build, type make (on a UNIX-like system). You need xa from the ca65 package.
+
+To run with vice, you have to pad the story file like so:
+
+	cat game.z5 /dev/zero | dd bs=1 count=512K >game.reu
+
+and start vice like so:
+
+	x64sc -reu -reusize 512 -reuimage game.reu zeugma-c64-reu-1.2.prg
+
+The program is released under an MIT license. Please refer to the file COPYING
+for details.
+
+The font used in the C64 version is Schumacher Clean, 6x8. Please refer to the
+file COPYING for details.
+
+Enjoy!

@@ -1,0 +1,53 @@
+C64:
+0000 zp
+0100 stack
+0800 code
+4800 workspace (inputbuf, tokbuf)
+4c00 characters? (vm for screen?????)
+5000 zstack
+5800 virt2phys
+6000 bitmap
+8000 cache
+ff00 end
+
+pages are 256 bytes
+2K for virt2phys (512K game. 1K for 256K game. 
+boundaries: 64K -> 1 page
+)
+
+virt2phys entry top bit means "unused page". => cache is max 128 pages ->32K
+
+25 bytes for zpcode
+another 25 can be in page 1
+
+Beeb:
+0000 zp
+0100 stack
+0400 zstack_lsb
+0900 inputbuf
+0a00 tokbuf
+#0b00 unused (fkeys)
+0b00 outputbuf
+0c00 phys2virt
+0e00 dfs workspace http://mdfs.net/Docs/Comp/BBC/Disk/DFSMem
+1400 code (font not required)
+4c00 zstack_msb
+5000 virt2phys (1K -> max 256k game)
+5400 cache
+7c00 screen
+
+
+===================================
+not finalised below
+
+Master:
+0400 workspace
+0e00 code
+4e00 cache
+c000 end
+
+Tube:
+0400 workspace
+0800 code
+4800 cache
+f800 end

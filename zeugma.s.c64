@@ -1,0 +1,9770 @@
+
+#define PAGE	.dsb	$ff - ((* - 1) & $ff), $ee
+
+; ##################### Configuration #####################
+
+#define PROFILER 0
+#define PROFILE_VPC 0
+#define TRACER 0
+#define PROP_PROF 0
+#define OP_PROF 0
+#define OPER_PROF 0
+
+; ##################### Declarations #####################
+
+#if TRACER
+tracetable	= $0300
+#endif
+
+#if PROP_PROF
+propproftbl	= $0300
+#endif
+
+#if WIDEHACK
+CLAIMED_WIDTH	= 62
+#else
+CLAIMED_WIDTH	= 53
+#endif
+
+
+KB_REPEATRATE	= 5
+KB_REPEATDELAY	= 35
+KB_BUFSIZE	= 32
+
+PHYS_START	= $80
+#if PROFILER || OP_PROF || OPER_PROF
+PHYS_END	= $e0
+proftable	= $e000
+#else
+PHYS_END	= $ff
+#endif
+
+;prop3msb	= $4600
+;prop3lsb	= $4700
+inputbuf	= $4800
+tokbuf		= $4900
+cachebuf	= tokbuf
+
+phys2virt_lsb	= $4a00
+phys2virt_msb	= $4a80
+
+callstack_lsb	= $5000
+callstack_msb	= $5400
+virt2phys	= $5800
+
+zheader		= (PHYS_START << 8)
+
+vaddr		= $02	; bits 8-15 of virtual address, argument to page_get and page_getdyn
+saved_argcount	= $03
+next_evict	= $04
+operand_types	= $05
+next_oper	= $06	; temporary save of x during operand fetch
+words_pushed	= $09	; number of 16-bit words pushed by the routine so far
+result		= $0a	; big-endian word
+first_evict	= $0c
+count1		= $0d	; temporary counter
+count2		= $0e	; temporary counter
+flag1		= $0f	; temporary flag
+
+phys_pc		= $10	; physical pointer to current program page, lsb = 0
+phys_globals	= $12	; physical pointer to globals table - $20
+phys_globals2	= $14	; physical pointer to globals table - $20 + $100
+phys_temp1	= $16	; temporary physical pointer, lsb = 0
+phys_ea_msb	= $18	; physical pointer to effective msb, lsb = 0
+phys_ea_lsb	= $1a	; physical pointer to effective lsb
+stackframe_lsb	= $1c	; physical pointer to lsbs of stack, locals begin at byte offset 2
+stackframe_msb	= $1e	; physical pointer to msbs of stack, locals begin at byte offset 2
+
+virt_pc		= $20	; virtual program counter lsb
+temp3		= $23	; temporary 3-byte word
+printsrc	= $26	; virtual pointer to text, 3 bytes, little-endian
+dynptr		= $29	; virtual pointer to dynamic memory, 2 bytes, little-endian
+dynptr2		= $2b	; virtual pointer to dynamic memory, 2 bytes, little-endian
+zver		= $2d
+randomflag	= $2e	; msb clear -> mix lfsr with timer
+
+operands	= $30	; 8 big-endian words
+
+dictip		= $40	; index, pivot
+dictop		= $42	; offset, pivot
+
+printword	= $44	; big-endian word for printing (contains three z-chars)
+shift		= $46	; current alphabet
+abbrev		= $47	; current abbreviation state
+longzflags	= $48	; flags to keep track of long char
+longzdata	= $49	; for accumulating the long char
+stream3level	= $4a	; negative if stream 3 is off, otherwise offset into the stream3* tables
+cacheend	= $4b	; little-endian word, one more than last object in property cache
+cachemax	= $4d	; cacheend must be kept less than or equal to this value
+frametime	= $4f
+blinkphase	= $50
+ticksdue	= $51
+in_readline	= $52
+in_callback	= $53
+
+objnum		= $54	; 16-bit object number, big-endian
+lfsr		= $56	; 16-bit lfsr for prng
+timeout		= $58
+timeleft	= $5a
+callback	= $5c
+readpc		= $5e	; 3 bytes, little-endian
+readsp		= $61
+any_output	= $62
+stream1on	= $63
+
+inputpos	= $64	; current tokeniser offset in inputbuf
+inputend	= $65	; offset in inputbuf, past last character
+inputsize	= $66	; size of inputbuf
+kb_rdpos	= $67
+
+toknsep		= $68	; number of separators in tokbuf
+tokstart	= $69	; start of current word in tokbuf
+encodepos	= $6a	; byte offset of current word in tok_encoded
+encodestate	= $6b	; next position within word
+
+dictordered	= $6c	; non-zero if binary search is possible
+dictentrylen	= $6d	; length of each entry (usually 9)
+dictbase	= $6e	; virtual pointer to start of dictionary
+dictentries	= $70	; number of entries in dictionary
+dictsize	= $72	; number of bytes in dictionary
+dictis		= $74	; index, start
+dictie		= $76	; index, end
+dictos		= $78	; offset, start = dictis * dictentrylen
+dictoe		= $7a	; offset, end = dictie * dictentrylen
+
+ZPORG		= $7c ; -> $9b
+ZPORG2		= $100
+
+; ##################### C64 Bitmap Display - Zero-page #####################
+
+kb_matrix	= $d0	; 8 bytes
+kb_modifier	= $d8
+kb_rollover	= $d9	; 3 bytes
+kb_repkey	= $dc
+kb_reptimer	= $dd
+kb_reprow	= $de
+kb_wrpos	= $df
+
+
+unread_lines	= $e0
+outputpos	= $e1
+buffermode	= $e2	; msb
+spaceleft	= $e3	; chars left on current line after printing the buffer
+bmptr		= $e4	; word, temporary
+tempbits	= $e6
+boldflag	= $e7	; msb
+l_column	= $e8
+u_column	= $e9
+
+style		= $f0
+revmask		= $f1	; $fc if reverse is on
+currwindow	= $f2	; 0 for lower, 1 for upper
+upperheight	= $f3
+u_row		= $f4	; [0, 24]
+l_row		= $f5	; [0, 24]
+u_charptr	= $f6	; word, start of char
+u_xoffs		= $f8	; [0, 7]
+l_charptr	= $f9	; word, start of char
+l_xoffs		= $fb	; [0, 7]
+u_left		= $fc	; chars left on current line
+l_left		= $fd	; chars left on current line
+fontptr		= $fe	; word, temporary
+
+; ##################### C64 Bitmap Display - Constants #####################
+
+HEIGHT		= 25
+WIDTH		= 53
+
+BLINKANIM	= $f0
+
+ZEROREU		= $22	; a header field that we've written 0 to
+
+outputbuf	= $4b00
+vmstart		= $4c00
+bmstart		= $6000
+
+; ##################### C64 Program Header #####################
+
+		.word	basicstub
+		*=$801
+basicstub
+		.(
+		.word	end, 1
+		.byt	$9e,"2061",0
+end		.word	0
+		.)
+entry
+		jmp	initialise
+
+; ##################### Zero-page code and tracer #####################
+
+zpcode1
+		* = ZPORG
+
+fetch_op_anywhere
+vpc1		lda	!0
+		.(
+		beq	req
+reqback
+		sta	phys_pc+1
++op_nop
++fetch_op
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+
+		asl
+		bcc	decode_0
+decode_1
+		sta	`mod_decode1+1
+mod_decode1	jmp	(jumptbl_decode1)
+
+decode_0
+		sta	`mod_decode0+1
+mod_decode0	jmp	(jumptbl_decode0)
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
++zpcode1len	= * - ZPORG
+
+#print zpcode1len
+
+		* = zpcode1 + * - ZPORG
++zpcode2
+		* = ZPORG2
+req
+		sty	virt_pc
+		lda	vpc1+1
+		sta	vaddr
+		lda	vpc1+2
+		sta	vaddr_bank
+		jsr	page_request
+		ldy	virt_pc
+		jmp	reqback
+		.)
+
+		* = zpcode2 + * - ZPORG2
+zpcode2len	= * - zpcode2
+#print zpcode2len
+
+; ##################### Operand decoding #####################
+
+decode_11
+		.(
+		; form variable
+
+		and	#$7f
+		sta	mod_jmp_var+1
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap4
+back4
+		jsr	fetch_operands
+
+mod_jmp_var	jmp	(jumptbl_var)
+wrap4
+		jsr	fetch_wrap
+		jmp	back4
+
++generic1
+		bmi	decode_11
+decode_10
+		; form short
+
+		tax
+		and	#$1f
+		ora	#$80
+		sta	mod_jmp_sh1op+1
+
+		txa
+		asl
+		ora	#$3f
+		jsr	fetch_operands
+
+mod_jmp_sh1op	jmp	(jumptbl_sh1op)
+
++decode_extended
+		lda	(phys_pc),y
+		iny
+		beq	wrap2
+back2
+		cmp	#$0d
+		bcc	nosat
+
+		lda	#$0d
+nosat
+		asl
+		ora	#$a0
+		sta	mod_jmp_ext+1
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap3
+back3
+		jsr	fetch_operands
+
+mod_jmp_ext	jmp	(jumptbl_ext)
+wrap2
+		jsr	fetch_wrap
+		jmp	back2
+wrap3
+		jsr	fetch_wrap
+		jmp	back3
+
++generic0
+		tax
+		and	#$3f
+		sta	mod_jmp_long+1
+
+		cpx	#$80
+		bcc	lt1_small
+lt1_var
+		; variable
+
+		jsr	fetch_o1_var
+		jmp	longtype2
+lt1_small
+		; small constant
+
+		lda	#0
+		sta	operands
+		lda	(phys_pc),y
+		iny
+		beq	wrap12
+back12
+		sta	operands+1
+longtype2
+		txa
+		asl
+		bpl	lt2_small
+lt2_var
+		jsr	fetch_o2_var
+		jmp	longtypedone
+wrap12
+		stx	operand_types
+		jsr	fetch_wrap
+		ldx	operand_types
+		jmp	back12
+lt2_small
+		; small constant
+
+		lda	#0
+		sta	operands+2
+		lda	(phys_pc),y
+		iny
+		beq	wrap22
+back22
+		sta	operands+3
+longtypedone
+		ldx	#4
+mod_jmp_long	jmp	(jumptbl_var)
+
+wrap22
+		jsr	fetch_wrap
+		jmp	back22
+		.)
+
+		.(
+var_stack
+		ldy	words_pushed
+		dey
+		lda	(stackframe_msb),y
+		sta	operands,x
+		inx
+		lda	(stackframe_lsb),y
+		sta	operands,x
+		inx
+		sty	words_pushed
+		ldy	virt_pc
+		lda	operand_types
+		bne	next
+
+		rts
+wrap4
+		stx	next_oper
+		jsr	fetch_wrap
+		ldx	next_oper
+		jmp	back4
+var_global
+		asl
+		bcs	upper_global
+
+		tay
+		lda	(phys_globals),y
+		sta	operands,x
+		iny
+		inx
+		lda	(phys_globals),y
+		sta	operands,x
+		inx
+		ldy	virt_pc
+		lda	operand_types
+		bne	next
+
+		rts
+upper_global
+		tay
+		lda	(phys_globals2),y
+		sta	operands,x
+		iny
+		inx
+		lda	(phys_globals2),y
+		sta	operands,x
+		inx
+		ldy	virt_pc
+		lda	operand_types
+		bne	next
+oper_11
+		rts
++fetch_operands
+		; Input
+		;	A, type bits
+		;	Y, pc lsb
+		; Output
+		;	operands
+		;	X, next byte offset into operands
+		;	Y, pc lsb
+
+		sta	mod_jmp+1
+		lsr
+		bcc	generic_oper
+
+mod_jmp		jmp	(jumptbl_oper)
+
++generic_oper
+
+#if OPER_PROF
+		.(
+		tax
+		inc	proftable,x
+		bne	noc1
+
+		inc	proftable+$100,x
+noc1
+		.)
+#endif
+
+		ldx	#0
+		rol
++generic_oper_2
+		eor	#$ff
+
+next
+		asl
+		bcs	oper_0
+oper_1
+		beq	oper_11
+		asl
+oper_10
+		sta	operand_types
+
+		; variable
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap4
+back4
+		sty	virt_pc
+		cmp	#$10
+		bcs	var_global
+
+		tay
+		beq	var_stack
+var_local
+		iny
+		lda	(stackframe_msb),y
+		sta	operands,x
+		inx
+		lda	(stackframe_lsb),y
+		sta	operands,x
+		inx
+		ldy	virt_pc
+		lda	operand_types
+		bne	next
+
+		rts
+oper_0
+		asl
+		bcc	oper_01
+oper_00
+		sta	operand_types
+
+		; large constant
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		sta	operands,x
+		lda	(phys_pc),y
+		iny
+		beq	wrap2
+back2
+		inx
+		sta	operands,x
+		inx
+		lda	operand_types
+		bne	next
+
+		rts
+wrap1
+		stx	next_oper
+		jsr	fetch_wrap
+		ldx	next_oper
+		jmp	back1
+wrap2
+		stx	next_oper
+		jsr	fetch_wrap
+		ldx	next_oper
+		jmp	back2
+oper_01
+		sta	operand_types
+
+		; small constant
+
+		lda	#0
+		sta	operands,x
+		lda	(phys_pc),y
+		iny
+		beq	wrap3
+back3
+		inx
+		sta	operands,x
+		inx
+		lda	operand_types
+		bne	next
+
+		rts
+wrap3
+		stx	next_oper
+		jsr	fetch_wrap
+		ldx	next_oper
+		jmp	back3
+		.)
+
+fetch_o1_var
+		.(
+		lda	(phys_pc),y
+		iny
+		beq	wrap11
+back11
+		sty	virt_pc
+		cmp	#$10
+		bcs	global1
+
+		tay
+		beq	stack1
+local1
+		iny
+		lda	(stackframe_msb),y
+		sta	operands
+		lda	(stackframe_lsb),y
+		sta	operands+1
+		ldy	virt_pc
+		rts
+stack1
+		ldy	words_pushed
+		dey
+		lda	(stackframe_msb),y
+		sta	operands
+		lda	(stackframe_lsb),y
+		sta	operands+1
+		sty	words_pushed
+		ldy	virt_pc
+		rts
+wrap11
+		stx	operand_types
+		jsr	fetch_wrap
+		ldx	operand_types
+		jmp	back11
+global1
+		asl
+		bcs	upper_global1
+
+		tay
+		lda	(phys_globals),y
+		sta	operands
+		iny
+		lda	(phys_globals),y
+		sta	operands+1
+		ldy	virt_pc
+		rts
+upper_global1
+		tay
+		lda	(phys_globals2),y
+		sta	operands
+		iny
+		lda	(phys_globals2),y
+		sta	operands+1
+		ldy	virt_pc
+		rts
+		.)
+
+oper_large_var
+		.(
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		sta	operands+0
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap2
+back2
+		sta	operands+1
+		jsr	fetch_o2_var
+		ldx	#4
+		rts
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+wrap2
+		jsr	fetch_wrap
+		jmp	back2
+		.)
+fetch_o2_var
+		.(
+		lda	(phys_pc),y
+		iny
+		beq	wrap21
+back21
+		sty	virt_pc
+		cmp	#$10
+		bcs	global2
+
+		tay
+		beq	stack2
+local2
+		iny
+		lda	(stackframe_msb),y
+		sta	operands+2
+		lda	(stackframe_lsb),y
+		sta	operands+3
+		ldy	virt_pc
+		rts
+stack2
+		ldy	words_pushed
+		dey
+		lda	(stackframe_msb),y
+		sta	operands+2
+		lda	(stackframe_lsb),y
+		sta	operands+3
+		sty	words_pushed
+		ldy	virt_pc
+		rts
+wrap21
+		jsr	fetch_wrap
+		jmp	back21
+global2
+		asl
+		bcs	upper_global2
+
+		tay
+		lda	(phys_globals),y
+		sta	operands+2
+		iny
+		lda	(phys_globals),y
+		sta	operands+3
+		ldy	virt_pc
+		rts
+upper_global2
+		tay
+		lda	(phys_globals2),y
+		sta	operands+2
+		iny
+		lda	(phys_globals2),y
+		sta	operands+3
+		ldy	virt_pc
+		rts
+		.)
+
+oper_var_large
+		.(
+		jsr	fetch_o1_var
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		sta	operands+2
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap2
+back2
+		sta	operands+3
+
+		ldx	#4
+		rts
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+wrap2
+		jsr	fetch_wrap
+		jmp	back2
+		.)
+
+		.(
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+wrap2
+		jsr	fetch_wrap
+		jmp	back2
++oper_large_var_var
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		sta	operands+0
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap2
+back2
+		sta	operands+1
+
+		jsr	fetch_o2_var
+		jsr	fetch_o3_var
+		ldx	#6
+		rts
+		.)
+fetch_o3_var
+		.(
+		lda	(phys_pc),y
+		iny
+		beq	wrap31
+back31
+		sty	virt_pc
+		cmp	#$10
+		bcs	global3
+
+		tay
+		beq	stack3
+local3
+		iny
+		lda	(stackframe_msb),y
+		sta	operands+4
+		lda	(stackframe_lsb),y
+		sta	operands+5
+		ldy	virt_pc
+		rts
+stack3
+		ldy	words_pushed
+		dey
+		lda	(stackframe_msb),y
+		sta	operands+4
+		lda	(stackframe_lsb),y
+		sta	operands+5
+		sty	words_pushed
+		ldy	virt_pc
+		rts
+wrap31
+		jsr	fetch_wrap
+		jmp	back31
+global3
+		asl
+		bcs	upper_global3
+
+		tay
+		lda	(phys_globals),y
+		sta	operands+4
+		iny
+		lda	(phys_globals),y
+		sta	operands+5
+		ldy	virt_pc
+		rts
+upper_global3
+		tay
+		lda	(phys_globals2),y
+		sta	operands+4
+		iny
+		lda	(phys_globals2),y
+		sta	operands+5
+		ldy	virt_pc
+		rts
+		.)
+
+oper_large_small_large
+		.(
+		lda	#0
+		sta	operands+2
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		sta	operands+0
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap2
+back2
+		sta	operands+1
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap3
+back3
+		sta	operands+3
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap4
+back4
+		sta	operands+4
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap5
+back5
+		sta	operands+5
+		ldx	#6
+		rts
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+wrap2
+		jsr	fetch_wrap
+		jmp	back2
+wrap3
+		jsr	fetch_wrap
+		jmp	back3
+wrap4
+		jsr	fetch_wrap
+		jmp	back4
+wrap5
+		jsr	fetch_wrap
+		jmp	back5
+		.)
+
+oper_small_small
+		.(
+		lda	#0
+		sta	operands+0
+		sta	operands+2
+
+		lda	(phys_pc),y
+		sta	operands+1
+		iny
+		beq	wrap1
+back1
+		lda	(phys_pc),y
+		sta	operands+3
+		iny
+		beq	fetch_wrap
+
+		ldx	#4
+		rts
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+		.)
+
+oper_small
+		.(
+		lda	#0
+		sta	operands+0
+
+		lda	(phys_pc),y
+		sta	operands+1
+		iny
+		beq	fetch_wrap
+back1
+		ldx	#2
+		rts
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+		.)
+
+; ##################### Memory access #####################
+
+fetch_wrap
+		.(
+		sta	savea+1
+
+		ldx	vpc1+1
+		inx
+		stx	vpc1+1
+		stx	vpc3+1
+		beq	wrap1
+back1
++refetch
++vpc3		lda	!0
+		beq	req
+reqback
+		sta	phys_pc+1
+savea		lda	#0
+		rts
+req
+		stx	vaddr
+		lda	vpc3+2
+		sta	vaddr_bank
+		jsr	page_request
+		ldy	#0
+		jmp	reqback
+wrap1
+		ldy	vpc1+2
+		iny
+		cpy	#>(virt2phys+$0800)
+		bne	noovf
+
+		ldy	#>virt2phys
+noovf
+		sty	vpc1+2
+		sty	vpc3+2
+		ldy	#0
+		jmp	back1
+		.)
+nextdynxy
+		.(
+		iny
+		bne	nowrap
+
+		inx
+		jsr	nextdynx
+		sta	phys_temp1+1
+		ldy	#0
+nowrap
+		rts
+		.)
+nextdynx
+		.(
+		stx	vaddr
+		lda	#>virt2phys
+		sta	vaddr_bank
+		jmp	page_request
+		.)
+
+load_ea
+		; Input
+		;	A = variable spec
+		; Output
+		;	phys_ea_msb, physical address of page containing msb
+		;	phys_ea_lsb, physical address of lsb
+		;	Y, offset within page of msb
+
+		.(
+		cmp	#$10
+		bcs	global
+
+		ldx	stackframe_lsb+1
+
+		cmp	#1
+		bcs	local	; next add stackframe, index + 1 and 1 (carry)
+stack
+		ldy	words_pushed
+		dey
+		tya
+		; next add stackframe, sp - 1 and 0 (carry)
+local
+		adc	stackframe_lsb
+		sta	phys_ea_lsb
+		tay
+		bcc	noc1
+
+		inx
+noc1
+		stx	phys_ea_lsb+1
+		txa
+		eor	#>(callstack_lsb ^ callstack_msb)
+		sta	phys_ea_msb+1
+		rts
+global
+		asl
+		bcs	upper_global
+
+		sec
+		adc	phys_globals
+		sta	phys_ea_lsb
+		tay
+		lda	phys_globals+1
+		adc	#0
+		sta	phys_ea_lsb+1
+		dey
+		cpy	#$ff
+		bne	nowrap1
+
+		sec
+		sbc	#1
+nowrap1
+		sta	phys_ea_msb+1
+		rts
+upper_global
+		;sec
+		adc	phys_globals2
+		sta	phys_ea_lsb
+		tay
+		lda	phys_globals2+1
+		adc	#0
+		sta	phys_ea_lsb+1
+		dey
+		cpy	#$ff
+		bne	nowrap2
+
+		sec
+		sbc	#1
+nowrap2
+		sta	phys_ea_msb+1
+		rts
+		.)
+
+fetch_at_pc
+		.(
+		ldx	vpc1+1
+		stx	vaddr
+		ldx	vpc1+2
+		stx	vaddr_bank
+		jsr	page_get
+		sta	phys_pc+1
+		ldy	virt_pc
+		lda	(phys_pc),y
+		iny
+		bne	noc1
+
+		inc	vpc1+1
+		inc	vpc3+1
+		bne	noc1
+
+		inc	vpc1+2
+		inc	vpc3+2
+noc1
+		sty	virt_pc
+		rts
+		.)
+
+; ##################### Instructions #####################
+
+#if 0
+unimplemented
+		.(
+		sty	operands+1
+		lda	#0
+		sta	operands
+		ldx	#>txt_unimp
+		ldy	#<txt_unimp
+		jsr	print_ram
+		jsr	print_num
+		jsr	disp_refresh_cursor
+		jmp	*
+txt_unimp
+		.byt	"Unimplemented ",0
+		.)
+#endif
+
+decode_add_l_var_sm
+		.(
+		jsr	fetch_o1_var
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		clc
+		adc	operands+1
+		tax
+		lda	operands+0
+		adc	#0
+		sta	result+0
+		jmp	store_result_x
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+		.)
+
+decode_add_l_var_var
+		.(
+		jsr	fetch_o1_var
+		jsr	fetch_o2_var
+		.)
+op_add
+		.(
+		lda	operands+1
+		clc
+		adc	operands+3
+		tax
+		lda	operands+0
+		adc	operands+2
+		sta	result+0
+		jmp	store_result_x
+		.)
+
+decode_and_l_var_sm
+		.(
+		jsr	fetch_o1_var
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		and	operands+1
+		tax
+		lda	#0
+		sta	result+0
+		jmp	store_result_x
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+		.)
+
+		.(
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
++decode_and_var
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		jsr	fetch_operands
+		.)
+op_and
+		.(
+		lda	operands+1
+		and	operands+3
+		tax
+		lda	operands+0
+		and	operands+2
+		sta	result+0
+		jmp	store_result_x
+		.)
+
+decode_aread
+		jsr	save_readpc_get_oper
+op_aread
+		.(
+		sty	virt_pc
+
+		lda	#0
+		sta	timeout
+		sta	timeout+1
+		sta	callback
+		sta	callback+1
+
+		cpx	#6
+		bcc	less
+
+		lda	operands+4
+		sta	timeout+1
+		lda	operands+5
+		sta	timeout
+
+		cpx	#8
+		bcc	less
+
+		lda	operands+6
+		sta	callback+1
+		lda	operands+7
+		sta	callback
+less
+		lda	timeout
+		sta	timeleft
+		lda	timeout+1
+		sta	timeleft+1
+
+		inc	in_readline
+
+		lda	zver
+		cmp	#5
+		bcs	v5
+
+		jsr	import_inputsize
+		jmp	was_v4
+v5
+		jsr	import_inputbuf
+was_v4
+		lda	#0
+		sta	ticksdue
+		jsr	inp_readline
+		pha
+		cmp	#0
+		bne	notint
+
+		sta	inputend
+notint
+		jsr	export_inputbuf
+		pla
+
+		dec	in_readline
+
+		sta	result+1
+		ldx	#0
+		stx	result
+
+		cmp	#10
+		bne	nonl
+
+		lda	#13
+		jsr	disp_putc
+nonl
+		lda	operands+2
+		ora	operands+3
+		beq	noparse
+
+		lda	zheader+$08
+		sta	dynptr+1
+		lda	zheader+$09
+		sta	dynptr
+		lda	#0
+		sta	flag1
+		jsr	tokenise
+noparse
+		ldy	virt_pc
+		lda	zver
+		cmp	#5
+		bcc	v4
+
+		jmp	store_result
+v4
+		jmp	fetch_op
+		.)
+
+op_art_shift
+		.(
+		ldx	operands+3
+		bmi	right
+		beq	done
+left
+		asl	operands+1
+		rol	operands
+		dex
+		bne	left
+		beq	done	; always
+right
+		bit	operands
+		bmi	neg
+pos
+		lsr	operands
+		ror	operands+1
+		inx
+		bne	pos
+		beq	done	; always
+neg
+		sec
+		ror	operands
+		ror	operands+1
+		inx
+		bne	neg
+done
+		lda	operands
+		sta	result
+		ldx	operands+1
+		jmp	store_result_x
+		.)
+
+op_buffer_mode
+		.(
+		sty	virt_pc
+		lda	operands+1
+		jsr	disp_buffermode
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+decode_call_vn
+		.(
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		jsr	fetch_operands
+		jmp	op_call_vn
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+		.)
+
+		.(
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+wrap2
+		jsr	fetch_wrap
+		jmp	back2
++decode_call_vn2
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		sta	mod0+1
+		lda	(phys_pc),y
+		iny
+		beq	wrap2
+back2
+		sta	mod1+1
+mod0		lda	#0
+		jsr	fetch_operands
+mod1		lda	#0
+		ldx	#8
+		jsr	generic_oper_2
+
+		;jmp	op_call_vn
+		.)
+
+op_call_vn
+		.(
+		lda	words_pushed
+		clc
+		adc	stackframe_lsb
+		sta	stackframe_lsb
+		sta	stackframe_msb
+		bcc	noc1
+
+		inc	stackframe_lsb+1
+		inc	stackframe_msb+1
+noc1
+		lda	words_pushed
+		ora	#$80	; flag indicates we're not supposed to store the result when returning
+		jmp	common_call
+		.)
+
+decode_call_vs2
+		.(
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		sta	mod0+1
+		lda	(phys_pc),y
+		iny
+		beq	wrap2
+back2
+		sta	mod1+1
+mod0		lda	#0
+		jsr	fetch_operands
+mod1		lda	#0
+		ldx	#8
+		jsr	generic_oper_2
+
+		jmp	op_call_vs
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+wrap2
+		jsr	fetch_wrap
+		jmp	back2
+		.)
+
+		.(
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
++decode_call_vs
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		jsr	fetch_operands
+		.)
+op_call_vs
+		.(
+		lda	words_pushed
+		clc
+		adc	stackframe_lsb
+		sta	stackframe_lsb
+		sta	stackframe_msb
+		bcc	noc1
+
+		inc	stackframe_lsb+1
+		inc	stackframe_msb+1
+noc1
+		lda	words_pushed
+		.)
+common_call
+		.(
+		stx	saved_argcount		; gets overwritten by nested calls, though
+
+		ldx	#0
+		sta	(stackframe_msb,x)
+		tya
+		sta	(stackframe_lsb,x)
+		ldy	#1
+		lda	vpc1+1
+		sta	(stackframe_msb),y
+		lda	vpc1+2
+		sta	(stackframe_lsb),y
+
++zvpatch1	lda	#>(virt2phys >> 3)
+		sta	vpc1+2
+		lda	operands
+		sta	vpc1+1
+		lda	operands+1
+		asl
+		rol	vpc1+1
+		rol	vpc1+2
+		asl
+		rol	vpc1+1
+		rol	vpc1+2
++zvpatch2	asl
+		rol	vpc1+1
+		rol	vpc1+2
+		tay
+		ldx	vpc1+1
+		lda	vpc1+2
++restored_routine
+		stx	vpc3+1
+		sta	vpc3+2
+
+		; get number of locals
+
+		sta	mod1+2
+mod1		lda	!0,x
+		beq	req
+reqback
+		sta	phys_pc+1
+
+		lda	(phys_pc),y
+		bpl	flagged_routine
++restored_routine_2
+		iny
+		beq	wrap1
+back1
+		sty	virt_pc
+
+		clc
+		adc	#$82
+		sta	words_pushed
+
+		ldx	#2
+		ldy	#2
+
+		cpx	saved_argcount
+		beq	argdone
+setarg
+		;cpy	words_pushed
+		;beq	localdone
+
+		lda	operands,x
+		sta	(stackframe_msb),y
+		inx
+		lda	operands,x
+		sta	(stackframe_lsb),y
+		inx
+		iny
+		cpx	saved_argcount
+		bne	setarg
+argdone
+		cpy	words_pushed
+		bcs	localdone
+
+		lda	#0
+clrlocal
+		sta	(stackframe_lsb),y
+		sta	(stackframe_msb),y
+		iny
+		cpy	words_pushed
+		bcc	clrlocal
+localdone
++v4call_patch		; z4 overwrites the following instructions with jmp v4call
+		ldy	virt_pc
+		jmp	fetch_op
+req
+		sty	virt_pc
+		stx	vaddr
+		lda	vpc1+2
+		sta	vaddr_bank
+		jsr	page_request
+		ldy	virt_pc
+		clc
+		jmp	reqback
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+		.)
+
+flagged_routine
+		.(
+		cmp	#$40
+		bcc	no_inline
+
+		cmp	#$41
+		beq	call_to_0
+
+		jmp	inline_routine
+call_to_0
+		jmp	op_rfalse
+no_inline
+		ora	#$80
+		sta	(phys_pc),y
+
+		cmp	#$83
+		bne	restored_routine_2
+
+		sty	savey+1
+		stx	save1+1
+		ldx	vpc1+2
+		stx	save2+1
+
+		iny
+		beq	wrap1
+back1
+		ldx	#0
+matchloop
+		lda	pattern,x
+		beq	skip
+
+		eor	#$aa
+		cmp	(phys_pc),y
+		bne	nomatch
+skip
+		iny
+		beq	wrap2
+back2
+		inx
+		cpx	#pattern_len
+		bne	matchloop
+
+		lda	#$06
+		jsr	locate
+		lda	(phys_pc),y
+		sta	temp3
+		lda	#$07
+		jsr	locate
+		lda	(phys_pc),y
+		sta	temp3+1
+		lda	#$10
+		jsr	locate
+		lda	(phys_pc),y
+		cmp	temp3
+		bne	nomatch
+		lda	#$11
+		jsr	locate
+		lda	(phys_pc),y
+		cmp	temp3+1
+		bne	nomatch
+match
+		lda	#0
+		jsr	locate_for_writing
+		lda	#$40
+		sta	(phys_pc),y
+		lda	#1
+		jsr	locate_for_writing
+		lda	temp3
+		sta	(phys_pc),y
+		lda	#2
+		jsr	locate_for_writing
+		lda	temp3+1
+		sta	(phys_pc),y
+nomatch
+save2		lda	#0
+		sta	vpc1+2
+save1		ldx	#0
+		stx	vpc1+1
+savey		ldy	#0
+		jmp	restored_routine
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+wrap2
+		stx	savex+1
+		jsr	fetch_wrap
+savex		ldx	#0
+		jmp	back2
+
+inline_routine
+		asl	operands+5
+		rol	operands+4
+
+		iny
+		beq	wrap3
+back3
+		lda	(phys_pc),y
+		sta	dynptr+1
+		iny
+		beq	wrap4
+back4
+		lda	(phys_pc),y
+		clc
+		adc	operands+5
+		sta	dynptr
+		lda	dynptr+1
+		adc	operands+4
+		sta	dynptr+1
+		tax
+		jsr	page_getdynx
+		sta	phys_temp1+1
+
+		ldx	dynptr+1
+		ldy	dynptr
+inlineloop
+		lda	(phys_temp1),y
+		bmi	inlinebreak
+
+		cmp	operands+2
+		bne	noteq
+
+		iny
+		bne	noc3
+
+		inx
+		lda	virt2phys,x
+		beq	wrap5
+back5
+		sta	phys_temp1+1
+		ldy	#0
+noc3
+		lda	(phys_temp1),y
+		cmp	operands+3
+		beq	inlineeq
+noc4
+		iny
+		bne	inlineloop
+
+		inx
+		lda	virt2phys,x
+		beq	wrap6
+back6
+		sta	phys_temp1+1
+		ldy	#0
+		jmp	inlineloop
+noteq
+		iny
+		bne	noc4
+
+		inx
+		lda	virt2phys,x
+		bne	noc4
+
+		jsr	nextdynx
+		sta	phys_temp1+1
+		ldy	#0
+		jmp	noc4
+inlinebreak
+		jmp	op_rfalse
+inlineeq
+		jmp	op_rtrue
+wrap3
+		jsr	fetch_wrap
+		jmp	back3
+wrap4
+		jsr	fetch_wrap
+		jmp	back4
+wrap5
+		jsr	nextdynx
+		jmp	back5
+wrap6
+		jsr	nextdynx
+		jmp	back6
+locate
+		ldy	save2+1
+		ldx	save1+1
+		clc
+		adc	savey+1
+		bcc	noc1
+
+		inx
+		bne	noc1
+
+		iny
+noc1
+		sta	savea+1
+		sty	mod1+2
+mod1		lda	!0,x
+		bne	noreq
+
+		sty	vaddr_bank
+		stx	vaddr
+		jsr	page_request
+noreq
+		sta	phys_pc+1
+savea		ldy	#0
+		rts
+
+locate_for_writing
+		jsr	locate
+		ldx	phys_pc+1
+		lda	phys2virt_msb-PHYS_START,x
+		ora	#>virt2phys
+		sta	phys2virt_msb-PHYS_START,x	; mark as dirty
+		rts
+
+pattern
+		.byt	$2d ^ $aa
+		.byt	$03 ^ $aa
+		.byt	$02 ^ $aa
+		.byt	$cf ^ $aa
+		.byt	$2f ^ $aa
+		.byt	$aa ^ $aa
+		.byt	$aa ^ $aa
+		.byt	$03 ^ $aa
+		.byt	$00 ^ $aa
+		.byt	$42 ^ $aa
+		.byt	$00 ^ $aa
+		.byt	$00 ^ $aa
+		.byt	$d1 ^ $aa
+		.byt	$cf ^ $aa
+		.byt	$2f ^ $aa
+		.byt	$aa ^ $aa
+		.byt	$aa ^ $aa
+		.byt	$03 ^ $aa
+		.byt	$00 ^ $aa
+		.byt	$61 ^ $aa
+		.byt	$01 ^ $aa
+		.byt	$00 ^ $aa
+		.byt	$c1 ^ $aa
+		.byt	$95 ^ $aa
+		.byt	$03 ^ $aa
+		.byt	$8c ^ $aa
+		.byt	$ff ^ $aa
+		.byt	$e9 ^ $aa
+		.byt	$b1 ^ $aa
+pattern_len	= * - pattern
+		.)
+
+v4call
+		.(
+		lda	saved_argcount
+		lsr
+		clc
+		adc	#1
+		sta	mod2+1
+
+		ldy	#2
+loop
+		cpy	words_pushed
+		bcs	done
+
+		sty	mod1+1
+
+		jsr	fetch_at_pc
+		sta	temp3
+		jsr	fetch_at_pc
+		sta	temp3+1
+
+mod1		ldy	#0
+mod2		cpy	#0
+		bcc	next
+
+		lda	temp3
+		sta	(stackframe_msb),y
+		lda	temp3+1
+		sta	(stackframe_lsb),y
+next
+		iny
+		jmp	loop
+done
+		ldx	vpc1+1
+		stx	vaddr
+		ldx	vpc1+2
+		stx	vaddr_bank
+		jsr	page_get
+
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+op_catch
+		.(
+		lda	stackframe_lsb+1
+		sta	result
+		ldx	stackframe_lsb
+		jmp	store_result_x
+		.)
+
+op_check_arg_count
+		.(
+		lda	operands+1
+		asl
+		cmp	saved_argcount
+		bcc	yes
+
+		jmp	branch_false
+yes
+		jmp	branch_true
+		.)
+
+op_clear_attr
+		.(
+		sty	virt_pc
+
+		lda	operands
+		sta	objnum
+		lda	operands+1
+		sta	objnum+1
+		jsr	locate_object
+
+		lda	operands+3
+		jsr	locate_attr
+
+		eor	#$ff
+		and	(phys_temp1),y
+		sta	(phys_temp1),y
+
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+op_copy_table
+		.(
+		sty	virt_pc
+
+		lda	operands+4
+		bpl	not_neg
+
+		lda	#0
+		sec
+		sbc	operands+5
+		sta	operands+5
+		lda	#0
+		sbc	operands+4
+		sta	operands+4
+		jmp	forwards
+not_neg
+		lda	operands+1
+		cmp	operands+3
+		lda	operands+0
+		sbc	operands+2
+		bcs	forwards
+backwards
+		lda	operands+1
+		clc
+		adc	operands+5
+		sta	operands+1
+		lda	operands+0
+		adc	operands+4
+		sta	operands+0
+
+		lda	operands+3
+		clc
+		adc	operands+5
+		sta	operands+3
+		lda	operands+2
+		adc	operands+4
+		sta	operands+2
+bwloop
+		lda	operands+5
+		bne	nz2
+
+		ora	operands+4
+		beq	done
+
+		dec	operands+4
+nz2
+		dec	operands+5
+
+		ldx	operands+0
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	operands+1
+		lda	(phys_temp1),y
+		pha
+
+		ldx	operands+2
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	operands+3
+		pla
+		sta	(phys_temp1),y
+
+		lda	operands+1
+		beq	nz3
+
+		dec	operands+0
+nz3
+		dec	operands+1
+
+		lda	operands+3
+		beq	nz4
+
+		dec	operands+2
+nz4
+		dec	operands+3
+		jmp	bwloop
+forwards
+		lda	operands+5
+		bne	nz1
+
+		ora	operands+4
+		beq	done
+
+		dec	operands+4
+nz1
+		dec	operands+5
+
+		ldx	operands+0
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	operands+1
+		lda	(phys_temp1),y
+		pha
+
+		ldx	operands+2
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	operands+3
+		pla
+		sta	(phys_temp1),y
+
+		inc	operands+1
+		bne	noc1
+
+		inc	operands+0
+noc1
+		inc	operands+3
+		bne	forwards
+
+		inc	operands+2
+		jmp	forwards
+done
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+decode_dec_sh_sm
+		.(
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		sta	operands+1
++op_dec
+		sty	virt_pc
+
+		lda	operands+1
+		jsr	load_ea
+		sty	mod1+1
+		ldy	#0
+		lda	(phys_ea_lsb),y
+		sec
+		sbc	#1
+		sta	(phys_ea_lsb),y
+		cmp	#$ff
+		bne	noc
+
+mod1		ldy	#0
+		lda	(phys_ea_msb),y
+		sec
+		sbc	#1
+		sta	(phys_ea_msb),y
+noc
+		ldy	virt_pc
+		jmp	fetch_op
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+		.)
+
+op_dec_chk
+		.(
+		sty	virt_pc
+
+		lda	operands+1
+		jsr	load_ea
+		sty	mod1+1
+		ldy	#0
+		lda	(phys_ea_lsb),y
+		sec
+		sbc	#1
+		sta	(phys_ea_lsb),y
+		sta	operands+1
+mod1		ldy	#0
+		cmp	#$ff
+		bne	noc
+
+		lda	(phys_ea_msb),y
+		sec
+		sbc	#1
+		sta	(phys_ea_msb),y
+noc
+		lda	(phys_ea_msb),y
+		sta	operands
+
+		ldy	virt_pc
+		jmp	op_jl
+		.)
+
+		.(
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
++decode_div_l_var_sm
+		jsr	fetch_o1_var
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		sty	virt_pc
+
+		sta	operands+3
+		ldy	#0
+		sty	operands+2
+		jmp	op_div_entry2
++op_div
+		sty	virt_pc
+
+		ldy	#0
+
+		lda	operands+2
+		bmi	neg2
+		bne	nospecial
+
+		lda	operands+3
+op_div_entry2
+		ldx	operands
+		bmi	neg1
+
+		cmp	#2
+		bne	notdivby2
+
+		lda	operands
+		lsr
+		sta	result
+		lda	operands+1
+		ror
+		tax
+
+		ldy	virt_pc
+		jmp	store_result_x
+notdivby2
+		cmp	#8
+		bne	nospecial2
+
+		lsr	operands
+		ror	operands+1
+		lsr	operands
+		ror	operands+1
+		lda	operands
+		lsr
+		sta	result
+		lda	operands+1
+		ror
+		tax
+
+		ldy	virt_pc
+		jmp	store_result_x
+neg2
+		lda	#0
+		sec
+		sbc	operands+3
+		sta	operands+3
+		lda	#0
+		sbc	operands+2
+		sta	operands+2
+		iny
+		jmp	wasneg2
+nospecial
+wasneg2
+		lda	operands
+		bpl	noneg1
+neg1
+		lda	#0
+		sec
+		sbc	operands+1
+		sta	operands+1
+		lda	#0
+		sbc	operands
+		sta	operands
+		iny
+noneg1
+nospecial2
+		sty	mod1+1
+
+		lda	#0
+		sta	temp3
+		sta	temp3+1
+		ldx	#16
+divloop
+		asl	operands+1
+		rol	operands
+		rol	temp3+1
+		rol	temp3
+		lda	temp3+1
+		sec
+		sbc	operands+3
+		tay
+		lda	temp3
+		sbc	operands+2
+		bcc	skip
+
+		sta	temp3
+		sty	temp3+1
+		inc	operands+1
+skip
+		dex
+		bne	divloop	
+
+mod1		lda	#0
+		and	#1
+		bne	neg3
+
+		ldx	operands+1
+		lda	operands
+		sta	result
+		ldy	virt_pc
+		jmp	store_result_x
+neg3
+		lda	#0
+		sec
+		sbc	operands+1
+		tax
+		lda	#0
+		sbc	operands
+		sta	result
+		ldy	virt_pc
+		jmp	store_result_x
+		.)
+
+op_encode_text
+		.(
+		sty	virt_pc
+
+		lda	#0
+		sta	encodepos
+		sta	encodestate
+
+		lda	operands+1
+		clc
+		adc	operands+5
+		sta	operands+1
+		lda	operands+0
+		adc	operands+4
+		sta	operands+0
+
+		lda	operands+3
+		beq	empty
+loop
+		ldx	operands+0
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	operands+1
+		lda	(phys_temp1),y
+		jsr	encodechar
+
+		inc	operands+1
+		bne	noc1
+
+		inc	operands+0
+noc1
+		dec	operands+3
+		bne	loop
+empty
+		jsr	encodefill
+
+		lda	#<tok_encoded
+		sta	mod+1
+		lda	#>tok_encoded
+		sta	mod+2
+
+		ldx	operands+6
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	operands+7
+write
+mod		lda	!0
+		sta	(phys_temp1),y
+
+		iny
+		bne	nowrap
+
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+nowrap
+		inc	mod+1
+		bne	noc2
+
+		inc	mod+2
+noc2
+		lda	mod+1
+		cmp	#<(tok_encoded+6)
+		bne	write
+
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+op_erase_line
+		.(
+		lda	operands+1
+		cmp	#1
+		bne	done
+
+		sty	virt_pc
+		jsr	disp_erase_line
+		ldy	virt_pc
+done
+		jmp	fetch_op
+		.)
+op_erase_window
+		.(
+		sty	virt_pc
+
+		lda	operands+1
+		jsr	disp_erase_window
+
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+op_get_child
+		.(
+		sty	virt_pc
+
+		lda	operands
+		sta	objnum
+		lda	operands+1
+		sta	objnum+1
+		jsr	locate_object
+
+		ldx	dynptr+1
+		lda	dynptr
+		clc
+		adc	#10
+		sta	dynptr
+		bcc	noc1
+
+		inx
+noc1
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	dynptr
+
+		lda	(phys_temp1),y
+		sta	result
+
+		iny
+		bne	noc2
+
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+noc2
+		lda	(phys_temp1),y
+		sta	result+1
+
+		ldy	virt_pc
+		jsr	store_result_sub
+
+		lda	result
+		ora	result+1
+		beq	no
+
+		jmp	branch_true
+no
+		jmp	branch_false
+		.)
+
+op_get_cursor
+		.(
+		sty	virt_pc
+
+		jsr	disp_get_cursor
+		stx	result
+		sty	result+1
+
+		ldx	operands+0
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	operands+1
+
+		lda	#0
+		sta	(phys_temp1),y
+		jsr	nextdynxy
+		lda	result+1
+		sta	(phys_temp1),y
+		jsr	nextdynxy
+		lda	#0
+		sta	(phys_temp1),y
+		jsr	nextdynxy
+		lda	result
+		sta	(phys_temp1),y
+
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+op_get_next_prop
+		.(
+		sty	virt_pc
+
+		lda	operands
+		ora	operands+1
+		beq	notfound
+
+		lda	operands+3
+		beq	first
+
+		jsr	locate_property
+		bcc	notfound
+
+		ldx	dynptr2+1
+		ldy	dynptr2
+		jsr	get_property_size
+
+		tya
+		clc
+		adc	dynptr2
+		sta	dynptr2
+		bcc	noc1
+
+		inc	dynptr2+1
+noc1
+firstback
+		ldx	dynptr2+1
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	dynptr2
+		lda	(phys_temp1),y
+		and	#$3f
+		tax
+		lda	#0
+		sta	result
+
+		ldy	virt_pc
+		jmp	store_result_x
+first
+		jsr	locate_proptable
+		jsr	skip_to_properties
+		jmp	firstback
+notfound
+		ldx	#0
+		stx	result
+		ldy	virt_pc
+		jmp	store_result_x
+		.)
+
+op_get_parent
+		.(
+		sty	virt_pc
+
+		lda	operands
+		sta	objnum
+		lda	operands+1
+		sta	objnum+1
+		jsr	locate_object
+
+		ldx	dynptr+1
+		lda	dynptr
+		clc
+		adc	#6
+		sta	dynptr
+		bcc	noc1
+
+		inx
+noc1
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	dynptr
+
+		lda	(phys_temp1),y
+		sta	result
+
+		iny
+		bne	noc2
+
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+noc2
+		lda	(phys_temp1),y
+		tax
+
+		ldy	virt_pc
+		jmp	store_result_x
+		.)
+
+		.(
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
++decode_getprop_l_var_sm
+		jsr	fetch_o1_var
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		sta	operands+3
+		.)
+op_get_prop
+		.(
+		sty	virt_pc
+
+		jsr	locate_property
+		bcc	default
+
+		ldx	dynptr2+1
+		ldy	dynptr2
+		jsr	get_property_size
+
+		cpy	#2
+		beq	large			; todo branch if 1
+
+		ldx	dynptr2+1
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	dynptr2
+
+		lda	(phys_temp1),y
+		tax
+		lda	#0
+		sta	result
+
+		ldy	virt_pc
+		jmp	store_result_x
+large
+		ldx	dynptr2+1
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	dynptr2
+
+		lda	(phys_temp1),y
+		sta	result
+
+		iny
+		bne	noc1
+
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+noc1
+		lda	(phys_temp1),y
+		tax
+
+		ldy	virt_pc
+		jmp	store_result_x
+default
+		lda	operands+3
+		asl
+		;clc
+		sbc	#1
+
+		clc
+		adc	zheader+$0b
+		sta	dynptr
+		lda	zheader+$0a
+		adc	#0
+		tax
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	dynptr
+
+		lda	(phys_temp1),y
+		sta	result
+
+		iny
+		bne	noc2
+
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+noc2
+		lda	(phys_temp1),y
+		tax
+
+		ldy	virt_pc
+		jmp	store_result_x
+		.)
+
+op_get_prop_addr
+		.(
+		sty	virt_pc
+
+		lda	operands
+		ora	operands+1
+		beq	ret0
+
+		lda	operands+2
+		bne	ret0
+
+		lda	operands+3
+		cmp	#$40
+		bcs	ret0
+
+		jsr	locate_property
+		bcc	ret0
+
+		ldx	dynptr2
+		lda	dynptr2+1
+		sta	result
+
+		ldy	virt_pc
+		jmp	store_result_x
+ret0
+		ldx	#0
+		stx	result
+
+		ldy	virt_pc
+		jmp	store_result_x
+		.)
+
+op_get_prop_len
+		.(
+		sty	virt_pc
+
+		ldx	operands
+		ldy	operands+1
+		bne	noc1
+
+		cpx	#0
+		beq	ret0
+		dex
+noc1
+		dey
+		sty	mod1+1
+
+		jsr	page_getdynx
+		sta	phys_temp1+1
+mod1		ldy	#0
+
+		lda	(phys_temp1),y
+		bmi	explicit
+
+		ldx	#1
+		and	#$40
+		beq	small
+
+		inx
+small
+		lda	#0
+		sta	result
+
+		ldy	virt_pc
+		jmp	store_result_x
+explicit
+		and	#$3f
+		bne	not64
+
+		lda	#$40
+not64
+		tax
+ret0
+common
+		lda	#0
+		sta	result
+
+		ldy	virt_pc
+		jmp	store_result_x
+		.)
+
+op_get_sibling
+		.(
+		sty	virt_pc
+
+		lda	operands
+		sta	objnum
+		lda	operands+1
+		sta	objnum+1
+		jsr	locate_object
+
+		ldx	dynptr+1
+		lda	dynptr
+		clc
+		adc	#8
+		sta	dynptr
+		bcc	noc1
+
+		inx
+noc1
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	dynptr
+
+		lda	(phys_temp1),y
+		sta	result
+
+		iny
+		bne	noc2
+
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+noc2
+		lda	(phys_temp1),y
+		sta	result+1
+
+		ldy	virt_pc
+		jsr	store_result_sub
+
+		lda	result
+		ora	result+1
+		beq	no
+
+		jmp	branch_true
+no
+		jmp	branch_false
+		.)
+
+op_illegal
+		.(
+		ldx	#>txt_ill
+		ldy	#<txt_ill
+		jsr	print_ram
+		jsr	disp_disable_cursor
+		jmp	*
+txt_ill
+		.byt	"[Illegal opcode] ",0
+		.)
+
+decode_inc_sh_sm
+		.(
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		sta	operands+1
++op_inc
+		sty	virt_pc
+
+		lda	operands+1
+		jsr	load_ea
+		sty	mod1+1
+		ldy	#0
+		lda	(phys_ea_lsb),y
+		clc
+		adc	#1
+		sta	(phys_ea_lsb),y
+		bcc	noc
+
+mod1		ldy	#0
+		lda	(phys_ea_msb),y
+		;sec
+		adc	#0
+		sta	(phys_ea_msb),y
+noc
+		ldy	virt_pc
+		jmp	fetch_op
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+		.)
+
+op_inc_chk
+		.(
+		sty	virt_pc
+
+		lda	operands+1
+		jsr	load_ea
+		sty	mod1+1
+		ldy	#0
+		lda	(phys_ea_lsb),y
+		clc
+		adc	#1
+		sta	(phys_ea_lsb),y
+		sta	operands+1
+mod1		ldy	#0
+		lda	(phys_ea_msb),y
+		adc	#0
+		sta	(phys_ea_msb),y
+		sta	operands
+
+		ldy	virt_pc
+		jmp	op_jg
+		.)
+
+op_insert_obj
+		.(
+		sty	virt_pc
+
+		jsr	remove
+
+		lda	operands+2
+		sta	objnum
+		lda	operands+3
+		sta	objnum+1
+		jsr	locate_object
+
+		; Replace child field of destination with the new value,
+		; storing the old value in dynptr2.
+
+		lda	dynptr
+		ldx	dynptr+1
+		clc
+		adc	#10
+		sta	dynptr
+		bcc	noc1
+
+		inx
+noc1
+		stx	dynptr+1
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	dynptr
+
+		lda	(phys_temp1),y
+		sta	dynptr2
+		lda	operands
+		sta	(phys_temp1),y
+		sta	objnum
+
+		iny
+		bne	noc2
+
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+noc2
+		lda	(phys_temp1),y
+		sta	dynptr2+1
+		lda	operands+1
+		sta	(phys_temp1),y
+		sta	objnum+1
+
+		; Update the parent field of the newly inserted child
+
+		jsr	locate_object
+		lda	dynptr
+		ldx	dynptr+1
+		clc
+		adc	#6
+		sta	dynptr
+		bcc	noc3
+
+		inx
+noc3
+		stx	dynptr+1
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	dynptr
+
+		lda	operands+2
+		sta	(phys_temp1),y
+
+		iny
+		bne	noc4
+
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+noc4
+		lda	operands+3
+		sta	(phys_temp1),y
+
+		lda	dynptr2
+		ora	dynptr2+1
+		beq	done		; no other children
+
+		; Update the sibling field of the newly inserted child
+
+		iny
+		bne	noc5
+
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+noc5
+		lda	dynptr2
+		sta	(phys_temp1),y
+
+		iny
+		bne	noc6
+
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+noc6
+		lda	dynptr2+1
+		sta	(phys_temp1),y
+done
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+decode_je_var
+		.(
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		jsr	fetch_operands
+		jmp	op_je
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+		.)
+
+decode_je_l_var_var
+		.(
+		jsr	fetch_o1_var
+		jsr	fetch_o2_var
+		jmp	op_je
+		.)
+
+decode_je_l_var_sm
+		.(
+		jsr	fetch_o1_var
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		cmp	operands+1
+		bne	no
+
+		lda	operands
+		bne	no
+yes
+		jmp	branch_true
+no
+		jmp	branch_false
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+		.)
+
+		.(
+loop
+		lda	operands+1,x
+		cmp	operands+1
+		bne	next
+
+		lda	operands,x
+		cmp	operands
+		beq	yes
+next
++op_je
+		dex
+		dex
+		bne	loop
+no
+		jmp	branch_false
+yes
+		jmp	branch_true
+		.)
+
+decode_jg_l_var_sm
+		.(
+		jsr	fetch_o1_var
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		cmp	operands+1
+		lda	#0
+		sbc	operands+0
+		bvc	nov
+
+		eor	#$80
+nov
+		bmi	yes
+
+		jmp	branch_false
+yes
+		jmp	branch_true
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+		.)
+
+decode_jg_l_var_var
+		.(
+		jsr	fetch_o1_var
+		jsr	fetch_o2_var
+		.)
+op_jg
+		.(
+		lda	operands+3
+		cmp	operands+1
+		lda	operands+2
+		sbc	operands+0
+		bvc	nov
+
+		eor	#$80
+nov
+		bmi	yes
+
+		jmp	branch_false
+yes
+		jmp	branch_true
+		.)
+
+		.(
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
++decode_jin_l_var_sm
+		jsr	fetch_o1_var
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		sta	operands+3
+		lda	#0
+		sta	operands+2
+		.)
+op_jin
+		.(
+		sty	virt_pc
+
+		lda	operands
+		sta	objnum
+		lda	operands+1
+		sta	objnum+1
+		jsr	locate_object
+
+		ldx	dynptr+1
+		lda	dynptr
+		clc
+		adc	#6
+		sta	dynptr
+		bcc	noc1
+
+		inx
+noc1
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	dynptr
+
+		lda	(phys_temp1),y
+		cmp	operands+2
+		bne	no
+
+		iny
+		bne	noc2
+
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+noc2
+		lda	(phys_temp1),y
+		cmp	operands+3
+		bne	no
+
+		ldy	virt_pc
+		jmp	branch_true
+no
+		ldy	virt_pc
+		jmp	branch_false
+		.)
+
+decode_jl_l_var_sm
+		.(
+		jsr	fetch_o1_var
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		sta	operands+3
+
+		lda	operands+1
+		cmp	operands+3
+		lda	operands+0
+		sbc	#0
+		bvc	nov
+
+		eor	#$80
+nov
+		bmi	yes
+
+		jmp	branch_false
+yes
+		jmp	branch_true
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+		.)
+
+		.(
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
++decode_jl_var
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		jsr	fetch_operands
+		.)
+op_jl
+		.(
+		lda	operands+1
+		cmp	operands+3
+		lda	operands+0
+		sbc	operands+2
+		bvc	nov
+
+		eor	#$80
+nov
+		bmi	yes
+
+		jmp	branch_false
+yes
+		jmp	branch_true
+		.)
+
+op_jump
+		.(
+		ldx	#0
+		lda	operands
+		sta	temp3+1
+		asl
+		bcc	noneg
+
+		dex
+noneg
+		stx	temp3+2
+		lda	operands+1
+		jmp	jump_entry
+		.)
+
+decode_jump_sh_la
+		.(
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		ldx	#0
+		sta	temp3+1
+		asl
+		bcc	noneg
+
+		dex
+noneg
+		stx	temp3+2
+		lda	(phys_pc),y
+		iny
+		beq	wrap2
+back2
++jump_entry
+		sec
+		sbc	#2
+		bcs	notspecial1
+
+		ldx	temp3+1
+		bne	notspecial2
+
+		stx	result
+		sta	result+1
+		jmp	common_return
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+wrap2
+		jsr	fetch_wrap
+		jmp	back2
+notspecial2
+		dec	temp3+1
+notspecial1
+		sty	virt_pc
+		clc
+		adc	virt_pc
+		tay
+		lda	vpc1+1
+		adc	temp3+1
+		sta	vpc1+1
+		sta	vpc3+1
+		lda	vpc1+2
+		adc	temp3+2
+		sta	vpc1+2
+		sta	vpc3+2
+		jmp	fetch_op_anywhere
+		.)
+
+decode_jz_sh_var
+		.(
+		jsr	fetch_o1_var
+		.)
+op_jz
+		.(
+		lda	operands
+		ora	operands+1
+		beq	yes
+
+		jmp	branch_false
+yes
+		jmp	branch_true
+		.)
+
+op_load
+		.(
+		sty	virt_pc
+
+		lda	operands+1
+		jsr	load_ea
+		lda	(phys_ea_msb),y
+		sta	result
+		ldy	#0
+		lda	(phys_ea_lsb),y
+		tax
+
+		ldy	virt_pc
+		jmp	store_result_x
+		.)
+
+		.(
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
++decode_loadb_var
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		jsr	fetch_operands
+		.)
+op_loadb
+		.(
+		sty	virt_pc
+
+		lda	operands+3
+		clc
+		adc	operands+1
+		sta	mod1+1
+		lda	operands+2
+		adc	operands
+		tax
+		lda	#0
+		sta	result
+		jsr	page_getdynx
+		sta	phys_temp1+1
+mod1		ldy	#0
+		lda	(phys_temp1),y
+		tax
+
+		ldy	virt_pc
+		jmp	store_result_x
+		.)
+
+decode_loadw_l_var_var
+		.(
+		jsr	fetch_o1_var
+		jsr	fetch_o2_var
+		jmp	op_loadw
+		.)
+
+decode_loadw_l_var_sm
+		.(
+		jsr	fetch_o1_var
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		sty	virt_pc
+
+		ldx	operands
+		asl
+		bcc	noc1
+
+		inx
+		clc
+noc1
+		adc	operands+1
+		sta	op_loadw_mod1+1
+		bcc	op_loadw_entry2
+
+		inx
+		jmp	op_loadw_entry2
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+		.)
+
+		.(
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
++decode_loadw_var
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		jsr	fetch_operands
+		.)
+op_loadw
+		.(
+		sty	virt_pc
+
+		lda	operands+3
+		asl
+		rol	operands+2	; not allowed to overflow
+		;clc
+		adc	operands+1
+		sta	op_loadw_mod1+1
+		lda	operands+2
+		adc	operands
+		tax
++op_loadw_entry2
+	;inc	1
+	;stx	$d02f
+	;dec	1
+		lda	virt2phys,x
+		beq	wrap1
+back1
+		sta	phys_temp1+1
++op_loadw_mod1	ldy	#0
+		lda	(phys_temp1),y
+	;inc	1
+	;sty	$d02f
+	;sta	$d02f
+	;dec	1
+		sta	result
+		iny
+		bne	noc1
+
+		inx
+		lda	virt2phys,x
+		beq	wrap2
+back2
+		sta	phys_temp1+1
+		ldy	#0
+noc1
+		lda	(phys_temp1),y
+	;inc	1
+	;sta	$d02f
+	;sta	$d030
+	;dec	1
+		tax
+
+		ldy	virt_pc
+		jmp	store_result_x
+wrap1
+		jsr	nextdynx
+		jmp	back1
+wrap2
+		jsr	nextdynx
+		jmp	back2
+		.)
+
+op_log_shift
+		.(
+		ldx	operands+3
+		bmi	right
+		beq	done
+left
+		asl	operands+1
+		rol	operands
+		dex
+		bne	left
+		beq	done	; always
+right
+		lsr	operands
+		ror	operands+1
+		inx
+		bne	right
+done
+		lda	operands
+		sta	result
+		ldx	operands+1
+		jmp	store_result_x
+		.)
+
+op_mod
+		.(
+		sty	virt_pc
+
+		lda	operands
+		bmi	neg1
+
+		jsr	modulo_abs
+
+		lda	temp3
+		sta	result
+		ldx	temp3+1
+
+		ldy	virt_pc
+		jmp	store_result_x
+neg1
+		lda	#0
+		sec
+		sbc	operands+1
+		sta	operands+1
+		lda	#0
+		sbc	operands
+		sta	operands
+
+		jsr	modulo_abs
+
+		lda	#0
+		sec
+		sbc	temp3+1
+		tax
+		lda	#0
+		sbc	temp3
+		sta	result
+
+		ldy	virt_pc
+		jmp	store_result_x
+		.)
+
+op_mul
+		.(
+
+		lda	#0
+		sta	result
+		sta	result+1
+
+		lda	operands+2
+		beq	mul16x8
+
+		ldx	operands
+		bne	noswap
+
+		sta	operands
+		lda	operands+3
+		ldx	operands+1
+		stx	operands+3
+		sta	operands+1
+		jmp	mul16x8
+noswap
+loop1
+		lsr	operands+2
+		beq	escape1
+
+		ror	operands+3
+		bcc	noadd1
+
+		lda	operands+1
+		clc
+		adc	result+1
+		sta	result+1
+		lda	operands
+		adc	result
+		sta	result
+noadd1
+		asl	operands+1
+		rol	operands
+		jmp	loop1
+escape1
+		ror	operands+3
+		bcc	noadd2
+
+		lda	operands+1
+		clc
+		adc	result+1
+		sta	result+1
+		lda	operands
+		adc	result
+		sta	result
+noadd2
+		asl	operands+1
+		rol	operands
+mul16x8
+loop2
+		lsr	operands+3
+		beq	escape2
+
+		bcc	noadd3
+
+		lda	operands+1
+		clc
+		adc	result+1
+		sta	result+1
+		lda	operands
+		adc	result
+		sta	result
+noadd3
+		asl	operands+1
+		rol	operands
+		jmp	loop2
+escape2
+		bcc	noadd4
+
+		lda	operands+1
+		clc
+		adc	result+1
+		sta	result+1
+		lda	operands
+		adc	result
+		sta	result
+noadd4
+		jmp	store_result
+		.)
+
+op_new_line
+		.(
+		sty	virt_pc
+		lda	#13
+		jsr	sendchar
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+op_not
+		.(
+		lda	operands
+		eor	#$ff
+		sta	result
+		lda	operands+1
+		eor	#$ff
+		tax
+		jmp	store_result_x
+		.)
+
+op_or
+		.(
+		lda	operands+1
+		ora	operands+3
+		tax
+		lda	operands+0
+		ora	operands+2
+		sta	result+0
+		jmp	store_result_x
+		.)
+
+op_output_stream
+		.(
+		lda	operands+1
+		cmp	#3
+		beq	on3
+
+		cmp	#$fd
+		beq	off3
+
+		cmp	#2
+		beq	on2
+
+		cmp	#$fe
+		beq	off2
+
+		cmp	#1
+		beq	on1
+
+		cmp	#$ff
+		beq	off1
+done
+		jmp	fetch_op
+on1
+		sta	stream1on
+		jmp	fetch_op
+off1
+		lsr	stream1on
+		jmp	fetch_op
+on2
+		lda	zheader+$11
+		ora	#$01
+		sta	zheader+$11
+		jmp	fetch_op
+off2
+		lda	zheader+$11
+		and	#$fe
+		sta	zheader+$11
+		jmp	fetch_op
+on3
+		inc	stream3level
+		ldx	stream3level
+		lda	operands+3
+		sta	stream3baselsb,x
+		clc
+		adc	#2
+		sta	stream3lsb,x
+		lda	operands+2
+		sta	stream3basemsb,x
+		adc	#0
+		sta	stream3msb,x
+		jmp	fetch_op
+off3
+		ldx	stream3level
+		bmi	done
+
+		sty	virt_pc
+
+		lda	stream3lsb,x
+		sec
+		sbc	stream3baselsb,x
+		sta	result+1
+		lda	stream3msb,x
+		sbc	stream3basemsb,x
+		sta	result
+
+		lda	result+1
+		sec
+		sbc	#2
+		sta	result+1
+		bcs	noc1
+
+		dec	result
+noc1
+		lda	stream3basemsb,x
+		sta	vaddr
+		jsr	page_getdyn
+		sta	phys_temp1+1
+		ldx	stream3level
+		ldy	stream3baselsb,x
+		lda	result
+		sta	(phys_temp1),y
+
+		iny
+		bne	nowrap1
+
+		inc	vaddr
+		jsr	page_getdyn
+		sta	phys_temp1+1
+		ldy	#0
+nowrap1
+		lda	result+1
+		sta	(phys_temp1),y
+
+		dec	stream3level
+
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+op_pop
+		.(
+		dec	words_pushed
+		jmp	fetch_op
+		.)
+
+op_print
+		.(
+		sty	printsrc
+		lda	vpc1+1
+		sta	printsrc+1
+		lda	vpc1+2
+		and	#$07
+		sta	printsrc+2
+		jsr	printstring
+		ldy	printsrc
+		lda	printsrc+1
+		sta	vpc1+1
+		sta	vpc3+1
+		lda	printsrc+2
+		ora	#>virt2phys
+		sta	vpc1+2
+		sta	vpc3+2
+		jmp	fetch_op_anywhere
+		.)
+
+op_print_addr
+		.(
+		sty	virt_pc
+
+		lda	operands
+		sta	printsrc+1
+		lda	operands+1
+		sta	printsrc
+		lda	#0
+		sta	printsrc+2
+		jsr	printstring
+
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+op_print_char
+		.(
+		sty	virt_pc
+
+		lda	operands+1
+		jsr	sendchar
+
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+op_print_num
+		.(
+		sty	virt_pc
+
+		jsr	print_num
+
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+op_print_obj
+		.(
+		sty	virt_pc
+
+		jsr	locate_proptable
+
+		lda	dynptr2
+		clc
+		adc	#1
+		sta	printsrc
+		lda	dynptr2+1
+		adc	#0
+		sta	printsrc+1
+		lda	#0
+		sta	printsrc+2
+		jsr	printstring
+
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+op_print_paddr
+		.(
+		sty	virt_pc
+
+		lda	#0
+		sta	printsrc+2
+		lda	operands
+		sta	printsrc+1
+		lda	operands+1
+		asl
+		rol	printsrc+1
+		rol	printsrc+2
+		asl
+		rol	printsrc+1
+		rol	printsrc+2
++zvpatch3	asl
+		rol	printsrc+1
+		rol	printsrc+2
+		sta	printsrc
+		jsr	printstring
+
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+op_print_ret
+		.(
+		sty	printsrc
+		lda	vpc1+1
+		sta	printsrc+1
+		lda	vpc1+2
+		and	#$07
+		sta	printsrc+2
+		jsr	printstring
+		lda	#13
+		jsr	disp_putc
+		jmp	op_rtrue
+		.)
+
+op_print_table
+		.(
+		sty	virt_pc
+
+		cpx	#6
+		bcs	nodefh
+
+		lda	#1
+		sta	operands+5
+nodefh
+		cpx	#8
+		bcs	nodefsk
+
+		lda	#0
+		sta	operands+6
+		sta	operands+7
+nodefsk
+rowloop
+		ldx	operands+5
+		beq	alldone
+chloop
+		ldx	operands+0
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	operands+1
+		lda	(phys_temp1),y
+		jsr	sendchar
+
+		lda	operands+1
+		ldx	operands+0
+		clc
+		adc	operands+3
+		bcc	noc1
+
+		inx
+		clc
+noc1
+		adc	operands+7
+		sta	operands+1
+		txa
+		adc	operands+6
+		sta	operands+0
+
+		dec	operands+5
+		jmp	rowloop
+alldone
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+op_pull
+		.(
+		sty	virt_pc
+
+		ldy	words_pushed
+		dey
+		lda	(stackframe_lsb),y
+		sta	temp3+1
+		lda	(stackframe_msb),y
+		sta	temp3
+		sty	words_pushed
+
+		lda	operands+1
+		jsr	load_ea
+		lda	temp3
+		sta	(phys_ea_msb),y
+		ldy	#0
+		lda	temp3+1
+		sta	(phys_ea_lsb),y
+
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+op_push
+		.(
+		sty	virt_pc
+
+		ldy	words_pushed
+		lda	operands
+		sta	(stackframe_msb),y
+		lda	operands+1
+		sta	(stackframe_lsb),y
+		iny
+		bmi	overflow
+back
+		sty	words_pushed
+
+		ldy	virt_pc
+		jmp	fetch_op
+overflow
+		ldy	#$40
+		jmp	back
+		.)
+
+op_put_prop
+		.(
+		sty	virt_pc
+
+		jsr	locate_property
+		;bcc	notfound
+
+		ldx	dynptr2+1
+		ldy	dynptr2
+		jsr	get_property_size
+
+		cpy	#2
+		beq	large		; todo branch on 1
+
+		ldx	dynptr2+1
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	dynptr2
+
+		lda	operands+5
+		sta	(phys_temp1),y
+
+		ldy	virt_pc
+		jmp	fetch_op
+large
+		ldx	dynptr2+1
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	dynptr2
+
+		lda	operands+4
+		sta	(phys_temp1),y
+
+		iny
+		bne	noc1
+
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+noc1
+		lda	operands+5
+		sta	(phys_temp1),y
+
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+op_restart
+op_quit
+		.(
+		ldx	#>txt_quit
+		ldy	#<txt_quit
+		jsr	print_ram
+		jsr	disp_disable_cursor
+		jmp	*
+txt_quit
+		.byt	"[Program terminated] ",0
+		.)
+
+op_random
+		.(
+		sty	virt_pc
+
+		lda	operands
+		bmi	seed
+
+		ora	operands+1
+		beq	rnd
+
+		ldx	#0
+		asl	lfsr
+		rol	lfsr+1
+		bpl	no7
+
+		inx
+no7
+		bit	lfsr+1
+		bvc	no6
+
+		inx
+no6
+		txa
+		and	#1
+		beq	noinc
+
+		inc	lfsr
+noinc
+		lda	operands
+		sta	operands+2
+		lda	operands+1
+		sta	operands+3
+
+		inc	1
+
+		lda	lfsr
+		bit	randomflag
+		bmi	notimer1
+
+		eor	$dc05
+notimer1
+		sta	operands+1
+		lda	lfsr+1
+		bit	randomflag
+		bmi	notimer2
+
+		eor	$dc04
+notimer2
+		sta	operands
+
+		dec	1
+
+		jsr	modulo
+		lda	temp3+1
+		clc
+		adc	#1
+		tax
+		lda	temp3
+		adc	#0
+		sta	result
+
+		ldy	virt_pc
+		jmp	store_result_x
+rnd
+		sta	randomflag
+		jsr	randomise
+		jmp	common
+seed
+		sta	randomflag
+		sta	lfsr
+		lda	operands+1
+		sta	lfsr+1
+common
+		ldx	#0
+		stx	result
+
+		ldy	virt_pc
+		jmp	store_result_x
+		.)
+
+decode_read_char
+		jsr	save_readpc_get_oper
+op_read_char
+		.(
+		sty	virt_pc
+
+		lda	#0
+		sta	timeout
+		sta	timeout+1
+		sta	callback
+		sta	callback+1
+
+		cpx	#4
+		bcc	less
+
+		lda	operands+2
+		sta	timeout+1
+		lda	operands+3
+		sta	timeout
+
+		cpx	#6
+		bcc	less
+
+		lda	operands+4
+		sta	callback+1
+		lda	operands+5
+		sta	callback
+less
+		lda	timeout
+		sta	timeleft
+		lda	timeout+1
+		sta	timeleft+1
+		lda	#0
+		sta	ticksdue
+
+		jsr	disp_begin_input
+		jsr	inp_readch
+		pha
+		jsr	disp_end_input
+		pla
+		tax
+		lda	#0
+		sta	result
+
+		ldy	virt_pc
+		jmp	store_result_x
+		.)
+
+decode_ret_sh_la
+		.(
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		sta	result
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap2
+back2
+		sta	result+1
+		jmp	common_return
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+wrap2
+		jsr	fetch_wrap
+		jmp	back2
+		.)
+op_ret
+		.(
+		lda	operands
+		sta	result
+		lda	operands+1
+		sta	result+1
+		jmp	common_return
+		.)
+
+op_remove_obj
+		.(
+		sty	virt_pc
+
+		jsr	remove
+
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+op_save
+op_restore
+op_check_unicode
+		.(
+		ldx	#0
+		stx	result
+		jmp	store_result_x
+		.)
+op_ext_save
+op_ext_restore
+		.(
+		jmp	branch_false
+		.)
+
+op_ret_popped
+		.(
+		ldy	words_pushed
+		dey
+		lda	(stackframe_lsb),y
+		sta	result+1
+		lda	(stackframe_msb),y
+		sta	result
+		jmp	common_return
+		.)
+
+op_rfalse
+		.(
+		lda	#0
+		sta	result
+		sta	result+1
+		jmp	common_return
+		.)
+
+op_rtrue
+		.(
+		lda	#0
+		sta	result
+		lda	#1
+		sta	result+1
+		jmp	common_return
+		.)
+
+op_save_undo
+op_restore_undo
+		.(
+		ldx	#$ff
+		stx	result
+		jmp	store_result_x
+		.)
+
+op_scan_table
+		.(
+		sty	virt_pc
+
+		cpx	#8
+		bcs	nodeff
+
+		lda	#$82
+		sta	operands+7
+nodeff
+loop
+		lda	operands+4
+		ora	operands+5
+		beq	no
+
+		ldx	operands+2
+		stx	result
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	operands+3
+		sty	result+1
+
+		lda	operands+7
+		bpl	small
+
+		lda	(phys_temp1),y
+		cmp	operands+0
+		bne	next
+
+		iny
+		bne	nowrap
+
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+nowrap
+		lda	(phys_temp1),y
+		cmp	operands+1
+		beq	yes
+next
+		lda	operands+7
+		and	#$7f
+		clc
+		adc	operands+3
+		sta	operands+3
+		bcc	noc2
+
+		inc	operands+2
+noc2
+		lda	operands+5
+		bne	noc1
+
+		dec	operands+4
+noc1
+		dec	operands+5
+		jmp	loop
+small
+		lda	(phys_temp1),y
+		cmp	operands+1
+		bne	next
+yes
+		ldy	virt_pc
+		jsr	store_result_sub
+		jmp	branch_true
+no
+		sta	result
+		sta	result+1
+		ldy	virt_pc
+		jsr	store_result_sub
+		jmp	branch_false
+		.)
+
+op_set_attr
+		.(
+		sty	virt_pc
+
+		lda	operands
+		sta	objnum
+		lda	operands+1
+		sta	objnum+1
+		ora	objnum
+		beq	ignore
+
+		jsr	locate_object
+
+		lda	operands+3
+		jsr	locate_attr
+
+		ora	(phys_temp1),y
+		sta	(phys_temp1),y
+ignore
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+op_set_cursor
+		.(
+		sty	virt_pc
+
+		ldy	operands+1
+		ldx	operands+3
+		jsr	disp_set_cursor
+
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+op_set_font
+		.(
+		ldx	#0
+		stx	result
+		jmp	store_result_x
+		.)
+
+op_set_text_style
+		.(
+		sty	virt_pc
+
+		lda	operands+1
+		jsr	disp_setstyle
+
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+op_set_window
+		.(
+		sty	virt_pc
+
+		lda	operands+1
+		jsr	disp_set_window
+
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+op_split_window
+		.(
+		sty	virt_pc
+
+		lda	operands+1
+		jsr	disp_split_window
+
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+decode_store_l_sm_sm
+		.(
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		sta	operands+1
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap2
+back2
+		sta	operands+3
+
+		sty	virt_pc
+
+		lda	operands+1
+		jsr	load_ea
+
+		lda	#0
+		sta	(phys_ea_msb),y
+		tay
+		lda	operands+3
+		sta	(phys_ea_lsb),y
+
+		ldy	virt_pc
+		jmp	fetch_op
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+wrap2
+		jsr	fetch_wrap
+		jmp	back2
+		.)
+
+		.(
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
++decode_store_l_sm_var
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		sta	operands+1
+
+		jsr	fetch_o2_var
+		.)
+op_store
+		.(
+		sty	virt_pc
+
+		lda	operands+1
+		jsr	load_ea
+		lda	operands+2
+		sta	(phys_ea_msb),y
+		ldy	#0
+		lda	operands+3
+		sta	(phys_ea_lsb),y
+
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+op_storeb
+		.(
+		sty	virt_pc
+
+		lda	operands+3
+		clc
+		adc	operands+1
+		sta	mod1+1
+		lda	operands+2
+		adc	operands
+		tax
+		jsr	page_getdynx
+		sta	phys_temp1+1
+mod1		ldy	#0
+		lda	operands+5
+		sta	(phys_temp1),y
+
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+op_storew
+		.(
+		sty	virt_pc
+
+		lda	operands+3
+		asl
+		rol	operands+2	; not allowed to overflow
+		;clc
+		adc	operands+1
+		sta	mod1+1
+		lda	operands+2
+		adc	operands
+		tax
+		jsr	page_getdynx
+		sta	phys_temp1+1
+mod1		ldy	#0
+		lda	operands+4
+		sta	(phys_temp1),y
+		iny
+		bne	noc1
+
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+noc1
+		lda	operands+5
+		sta	(phys_temp1),y
+
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+decode_sub_l_var_sm
+		.(
+		jsr	fetch_o1_var
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		eor	#$ff
+		sec
+		adc	operands+1
+		tax
+		lda	operands+0
+		sbc	#0
+		sta	result+0
+		jmp	store_result_x
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+		.)
+
+		.(
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
++decode_sub_var
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		jsr	fetch_operands
+		.)
+op_sub
+		.(
+		lda	operands+1
+		sec
+		sbc	operands+3
+		tax
+		lda	operands+0
+		sbc	operands+2
+		sta	result+0
+		jmp	store_result_x
+		.)
+
+op_test
+		.(
+		lda	operands
+		and	operands+2
+		cmp	operands+2
+		bne	no
+		lda	operands+1
+		and	operands+3
+		cmp	operands+3
+		bne	no
+
+		jmp	branch_true
+no
+		jmp	branch_false
+		.)
+
+op_test_attr
+		.(
+		sty	virt_pc
+
+		lda	operands
+		sta	objnum
+		lda	operands+1
+		sta	objnum+1
+		jsr	locate_object
+
+		lda	operands+3
+		jsr	locate_attr
+
+		and	(phys_temp1),y
+		beq	no
+
+		ldy	virt_pc
+		jmp	branch_true
+no
+		ldy	virt_pc
+		jmp	branch_false
+		.)
+
+op_throw
+		.(
+		lda	operands+3
+		sta	stackframe_lsb
+		sta	stackframe_msb
+		lda	operands+2
+		sta	stackframe_lsb+1
+		eor	#>(callstack_msb ^ callstack_lsb)
+		sta	stackframe_msb+1
+
+		lda	operands
+		sta	result
+		lda	operands+1
+		sta	result+1
+		jmp	common_return
+		.)
+
+op_tokenise
+		.(
+		sty	virt_pc
+
+		cpx	#6
+		bcc	nodict
+
+		lda	operands+4
+		ldy	operands+5
+		sta	dynptr+1
+		ora	operands+5
+		bne	userdict
+nodict
+		lda	zheader+$08
+		sta	dynptr+1
+		ldy	zheader+$09
+userdict
+		sty	dynptr
+
+		lda	#0
+		cpx	#8
+		bcc	noflag
+
+		lda	operands+6
+		ora	operands+7
+noflag
+		sta	flag1
+
+		jsr	import_inputbuf
+		jsr	tokenise
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+; ##################### Storing and branching #####################
+
+store_result_sub
+		.(
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		sty	virt_pc
+
+		cmp	#$10
+		bcs	global
+
+		tay
+		beq	push
+
+		iny
+		lda	result
+		sta	(stackframe_msb),y
+		lda	result+1
+		sta	(stackframe_lsb),y
+
+		ldy	virt_pc
+		rts
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+push
+		ldy	words_pushed
+		lda	result
+		sta	(stackframe_msb),y
+		lda	result+1
+		sta	(stackframe_lsb),y
+		iny
+		bmi	overflow
+ovf_back
+		sty	words_pushed
+
+		ldy	virt_pc
+		rts
+overflow
+		ldy	#$40
+		jmp	ovf_back
+global
+		asl
+		bcs	upper_global
+
+		tay
+		lda	result
+		sta	(phys_globals),y
+		iny
+		lda	result+1
+		sta	(phys_globals),y
+
+		ldy	virt_pc
+		rts
+upper_global
+		tay
+		lda	result
+		sta	(phys_globals2),y
+		iny
+		lda	result+1
+		sta	(phys_globals2),y
+
+		ldy	virt_pc
+		rts
+		.)
+
+branch_false
+		.(
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		tax
+		bmi	branch_dont
+
+		jmp	branch_do
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+		.)
+bt_wrap1
+		jsr	fetch_wrap
+		jmp	bt_back1
+branch_true
+		.(
+		lda	(phys_pc),y
+		iny
+		beq	bt_wrap1
++bt_back1
+		tax
+		bpl	branch_dont
+		.)
+branch_do
+		.(
+		asl
+		bmi	short
+
+		lsr
+		;and	#$3f
+		ldx	#0
+		cmp	#$20
+		bcc	forwards
+
+		dex
+		ora	#$c0
+forwards
+		stx	temp3+2
+		sta	temp3+1
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap2
+back2
+		cmp	#2
+		bcs	notspecial
+
+		ldx	temp3+1
+		bne	notspecial
+
+		stx	result
+		sta	result+1
+		jmp	common_return
+wrap2
+		jsr	fetch_wrap
+		jmp	back2
++branch_dont
+		asl
+		bmi	done
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap3
+back3
+done
+		jmp	fetch_op
+wrap3
+		jsr	fetch_wrap
+		jmp	back3
++branch_notspecial
+notspecial
+		sec
+		sbc	#2
+		sta	temp3
+		lda	temp3+1
+		sbc	#0
+		sta	temp3+1
+		bcs	noc2
+
+		dec	temp3+2
+noc2
+		tya
+		clc
+		adc	temp3
+		tay
+		lda	vpc1+1
+		adc	temp3+1
+		sta	vpc1+1
+		sta	vpc3+1
+		lda	vpc1+2
+		adc	temp3+2
+		sta	vpc1+2
+		sta	vpc3+2
+		jmp	fetch_op_anywhere
+short
+		lsr
+		and	#$3f
+		;clc
+		sbc	#1
+		bcc	special
+
+		sty	virt_pc
+		clc
+		adc	virt_pc
+		tay
+		bcc	noc1
+
+		inc	vpc1+1
+		inc	vpc3+1
+		bne	noc1
+
+		inc	vpc1+2
+		inc	vpc3+2
+noc1
+		jmp	fetch_op_anywhere
+special
+		and	#1
+		sta	result+1
+		lda	#0
+		sta	result
+		;jmp	common_return
+		.)
+
+common_return
+		.(
+		ldy	#1
+		lda	(stackframe_lsb),y
+		sta	vpc1+2
+		sta	vpc3+2
+		lda	(stackframe_msb),y
+		sta	vpc1+1
+		sta	vpc3+1
+		ldx	#0
+		lda	(stackframe_lsb,x)
+		tay
+		lda	(stackframe_msb,x)
+		bmi	nostore
+
+		sta	words_pushed
+		lda	stackframe_lsb
+		sec
+		sbc	words_pushed
+		sta	stackframe_lsb
+		sta	stackframe_msb
+		bcs	noc1
+
+		dec	stackframe_lsb+1
+		dec	stackframe_msb+1
+noc1
+		lda	vpc1+2
+		sta	mod1+2
+		ldx	vpc1+1
+mod1		lda	!0,x
+		beq	req
+reqback
+		sta	phys_pc+1
+		ldx	result+1
+		lda	(phys_pc),y
+		iny
+		bne	store_here
+
+		jsr	fetch_wrap
+		ldx	result+1
+		jmp	store_here
+nostore
+		and	#$7f
+		sta	words_pushed
+		lda	stackframe_lsb
+		sec
+		sbc	words_pushed
+		sta	stackframe_lsb
+		sta	stackframe_msb
+		bcs	noc2
+
+		dec	stackframe_lsb+1
+		dec	stackframe_msb+1
+noc2
+		jmp	fetch_op_anywhere
+req
+		sty	virt_pc
+		stx	vaddr
+		lda	vpc1+2
+		sta	vaddr_bank
+		jsr	page_request
+		ldy	virt_pc
+		jmp	reqback
+		.)
+
+store_result
+		ldx	result+1
+store_result_x
+		.(
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
++store_here
+		sty	virt_pc
+
+		tay
+		bne	not_push
+push
+		ldy	words_pushed
+		lda	result
+		sta	(stackframe_msb),y
+		txa
+		sta	(stackframe_lsb),y
+		iny
+		bmi	overflow
+ovf_back
+		sty	words_pushed
+
+		ldy	virt_pc
+		jmp	fetch_op
+overflow
+		ldy	#$40
+		jmp	ovf_back
+wrap1
+		stx	result+1
+		jsr	fetch_wrap
+		ldx	result+1
+		jmp	back1
++not_push
+		cmp	#$10
+		bcs	global
+local
+		iny
+		lda	result
+		sta	(stackframe_msb),y
+		txa
+		sta	(stackframe_lsb),y
+
+		ldy	virt_pc
+		jmp	fetch_op
+global
+		asl
+		bcs	upper_global
+
+		tay
+		lda	result
+		sta	(phys_globals),y
+		iny
+		txa
+		sta	(phys_globals),y
+
+		ldy	virt_pc
+		jmp	fetch_op
+upper_global
+		tay
+		lda	result
+		sta	(phys_globals2),y
+		iny
+		txa
+		sta	(phys_globals2),y
+
+		ldy	virt_pc
+		jmp	fetch_op
+		.)
+
+; ##################### Various routines #####################
+
+randomise
+		.(
+		inc	1
+		lda	$dc04
+		sta	lfsr
+		lda	$dc05
+		sta	lfsr+1
+		dec	1
+		rts
+		.)
+
+import_inputsize
+		.(
+		lda	operands
+		sta	vaddr
+		jsr	page_getdyn
+		sta	phys_temp1+1
+		ldy	operands+1
+		lda	(phys_temp1),y
+		sec
+		sbc	#1
+		sta	inputsize
+		ldx	#0
+		stx	inputend
+		rts
+		.)
+
+import_inputbuf
+		.(
+		lda	operands
+		sta	vaddr
+		jsr	page_getdyn
+		sta	phys_temp1+1
+		ldy	operands+1
+		lda	(phys_temp1),y
+
+		ldx	zver
+		cpx	#5
+		bcc	v4
+
+		sta	inputsize
+
+		iny
+		bne	noc1
+
+		inc	vaddr
+		jsr	page_getdyn
+		sta	phys_temp1+1
+		ldy	#0
+noc1
+		lda	(phys_temp1),y
+		sta	inputend
+
+		ldx	#0
+prepare
+		cpx	inputend
+		beq	prepdone
+
+		iny
+		bne	noc3
+
+		stx	mod3+1
+		inc	vaddr
+		jsr	page_getdyn
+		sta	phys_temp1+1
+		ldy	#0
+mod3		ldx	#0
+noc3
+		lda	(phys_temp1),y
+		sta	inputbuf,x
+		inx
+		jmp	prepare
+prepdone
+		rts
+v4
+		sec
+		sbc	#1
+		sta	inputsize
+
+		ldx	#0
+prepare4
+		stx	inputend
+
+		iny
+		bne	noc4
+
+		inc	vaddr
+		jsr	page_getdyn
+		sta	phys_temp1+1
+		ldy	#0
+noc4
+		lda	(phys_temp1),y
+		beq	prepdone
+
+		ldx	inputend
+		sta	inputbuf,x
+		inx
+		jmp	prepare4
+		.)
+
+export_inputbuf
+		.(
+		lda	operands+1
+		clc
+		adc	#1
+		sta	mod1+1
+		lda	operands
+		adc	#0
+		sta	vaddr
+		jsr	page_getdyn
+		sta	phys_temp1+1
+mod1		ldy	#0
+
+		ldx	zver
+		cpx	#5
+		bcc	v4
+
+		lda	inputend
+		sta	(phys_temp1),y
+
+		ldx	#0
+writeback
+		cpx	inputend
+		beq	wbdone
+
+		iny
+		bne	noc2
+
+		stx	mod2+1
+		inc	vaddr
+		jsr	page_getdyn
+		sta	phys_temp1+1
+		ldy	#0
+mod2		ldx	#0
+noc2
+		lda	inputbuf,x
+		cmp	#$41
+		bcc	nouc
+
+		cmp	#$5b
+		bcs	nouc
+
+		ora	#$20
+nouc
+		sta	(phys_temp1),y
+		inx
+		jmp	writeback
+wbdone
+		rts
+v4
+		ldx	#0
+writeback4
+		cpx	inputend
+		beq	wbdone4
+
+		lda	inputbuf,x
+		cmp	#$41
+		bcc	nouc4
+
+		cmp	#$5b
+		bcs	nouc4
+
+		ora	#$20
+nouc4
+		sta	(phys_temp1),y
+		inx
+		iny
+		bne	noc3
+
+		stx	mod3+1
+		inc	vaddr
+		jsr	page_getdyn
+		sta	phys_temp1+1
+		ldy	#0
+mod3		ldx	#0
+noc3
+		jmp	writeback4
+wbdone4
+		lda	#0
+		sta	(phys_temp1),y
+		rts
+		.)
+
+; ##################### Printing and string decoding #####################
+
+print_num
+		.(
+		lda	operands
+		bpl	positive
+
+		lda	#0
+		sec
+		sbc	operands+1
+		sta	operands+1
+		lda	#0
+		sbc	operands
+		sta	operands
+
+		lda	#$2d
+		jsr	sendchar
+positive
+		ldy	#0
+		ldx	#0
+loop
+		lda	operands+1
+		cmp	powers_lsb,x
+		lda	operands
+		sbc	powers_msb,x
+		bcc	nofit
+
+		lda	operands+1
+		;sec
+		sbc	powers_lsb,x
+		sta	operands+1
+		lda	operands
+		sbc	powers_msb,x
+		sta	operands
+		iny
+		jmp	loop
+nofit
+		tya
+		sta	buffer,x
+		ldy	#0
+		inx
+		cpx	#4
+		bne	loop
+
+		ldx	#0
+loop1
+		lda	buffer,x
+		bne	print
+
+		inx
+		cpx	#4
+		bne	loop1
+
+		beq	last	; always
+loop2
+		lda	buffer,x
+print
+		stx	mod1+1
+		ora	#$30
+		jsr	sendchar
+mod1		ldx	#0
+		inx
+		cpx	#4
+		bne	loop2
+last
+		lda	operands+1
+		ora	#$30
+		jmp	sendchar
+powers_lsb
+		.byt	<10000,<1000,<100,<10
+powers_msb
+		.byt	>10000,>1000,>100,>10
+buffer
+		.dsb	4,0
+		.)
+
+print_ram
+		.(
+		stx	mod+2
+		sty	mod+1
+loop
+mod		lda	!0
+		beq	done
+
+		jsr	sendchar
+		inc	mod+1
+		bne	loop
+
+		inc	mod+2
+		jmp	loop
+done
+		rts
+		.)
+
+printstring
+		.(
+		lda	#0
+		sta	shift
+		sta	abbrev
+		sta	longzflags
+nextword
+		; Fetch a word
+
+		lda	printsrc+2
+		ora	#>virt2phys
+		sta	vaddr_bank
+		lda	printsrc+1
+		sta	vaddr
+		jsr	page_get
+		sta	phys_temp1+1
+		ldy	printsrc
+		lda	(phys_temp1),y
+		sta	printword
+		iny
+		bne	nowrap
+
+		ldx	printsrc+1
+		inx
+		stx	printsrc+1
+		stx	vaddr
+		bne	noc1
+
+		ldx	printsrc+2
+		inx
+		stx	printsrc+2
+		txa
+		ora	#>virt2phys
+		sta	vaddr_bank
+noc1
+		jsr	page_get
+		sta	phys_temp1+1
+		ldy	#0
+nowrap
+		lda	(phys_temp1),y
+		sta	printword+1
+		iny
+		bne	noc2
+
+		inc	printsrc+1
+		bne	noc2
+
+		inc	printsrc+2
+noc2
+		sty	printsrc
+
+		lda	printword
+		lsr
+		lsr
+		and	#$1f
+		jsr	printch
+
+		lda	printword+1
+		sta	printstr_mod+1
+
+		lda	printword
+		asl	printword+1
+		rol
+		asl	printword+1
+		rol
+		asl	printword+1
+		rol
+		and	#$1f
+		jsr	printch
+
++printstr_mod	lda	#0
+		and	#$1f
+		jsr	printch
+
+		lda	printword
+		bpl	nextword
+
+		rts
+		.)
+printch
+		.(
+		lsr	longzflags
+		bcs	handle_long
+
+		ldx	abbrev
+		bne	do_abb
+
+		cmp	#4
+		beq	was_4
+
+		cmp	#5
+		beq	was_5
+
+		bcc	was_0123
+
+		clc
+		adc	shift
+		tay
+		cpy	#6+52
+		beq	prepare_long
+
+		lda	alphabet-6,y		; todo make dynamic
+
+		ldy	#0
+		sty	shift
+
+		jmp	sendchar
+was_4
+		lda	#26
+		sta	shift
+		rts
+was_5
+		lda	#52
+		sta	shift
+		rts
+was_0123
+		asl
+		beq	space
+
+		asl
+		asl
+		asl
+		asl
+		sta	abbrev
+		lda	#0
+		sta	shift
+		rts
+space
+		lda	#0
+		sta	shift
+		lda	#32
+		jmp	sendchar
+handle_long
+		ldx	longzflags
+		bne	msb
+
+		sta	mod1+1
+		lda	longzdata
+		asl
+		asl
+		asl
+		asl
+		asl
+mod1		ora	#0
+		jmp	sendchar
+msb
+		sta	longzdata
+		rts
+prepare_long
+		lda	#3
+		sta	longzflags
+		lda	#0
+		sta	longzdata
+		sta	shift
+		rts
+do_abb
+		ora	abbrev
+		sec
+		sbc	#32
+		asl
+		clc
+		adc	zheader+$19
+		sta	dynptr
+		lda	zheader+$18
+		adc	#0
+		tax
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	dynptr
+
+		lda	printsrc
+		sta	temp3
+		lda	printsrc+1
+		sta	temp3+1
+		lda	printsrc+2
+		sta	temp3+2
+		lda	printword
+		sta	mod2+1
+		lda	printword+1
+		sta	mod3+1
+		lda	printstr_mod+1
+		sta	mod4+1
+
+		lda	(phys_temp1),y
+		sta	printsrc+1
+
+		iny
+		bne	noc1
+
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+noc1
+		lda	(phys_temp1),y
+		sta	printsrc
+		lda	#0
+		asl	printsrc
+		rol	printsrc+1
+		rol
+		sta	printsrc+2
+		jsr	printstring
+
+		lda	temp3
+		sta	printsrc
+		lda	temp3+1
+		sta	printsrc+1
+		lda	temp3+2
+		sta	printsrc+2
+mod2		lda	#0
+		sta	printword
+mod3		lda	#0
+		sta	printword+1
+mod4		lda	#0
+		sta	printstr_mod+1
+		lda	#0
+		sta	abbrev
+		sta	shift
+		sta	longzflags
+		rts
+		.)
+
+alphabet
+		.byt	"abcdefghijklmnopqrstuvwxyz"
+		.byt	"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+		.byt	"~",$0d,"0123456789.,!?_#'",$22,"/",$5c,"-:()"
+
+sendchar
+		.(
+		cmp	#0
+		beq	dummy
+
+		ldx	stream3level
+		bpl	s3
+
+		ldx	stream1on
+		beq	dummy
+
+		stx	any_output
+		jmp	disp_putc
+s3
+		pha
+		lda	stream3msb,x
+		tax
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldx	stream3level
+		ldy	stream3lsb,x
+		pla
+		sta	(phys_temp1),y
+
+		inc	stream3lsb,x
+		bne	noc1
+
+		inc	stream3msb,x
+noc1
+dummy
+		rts
+		.)
+
+stream3basemsb	.dsb	16,0
+stream3baselsb	.dsb	16,0
+stream3msb	.dsb	16,0
+stream3lsb	.dsb	16,0
+
+; ##################### Object manipulation #####################
+
+locate_object
+		; Input
+		;	objnum, non-zero object number
+		; Output
+		;	dynptr, virtual address of object table entry
+
+		.(
+		lda	zheader+$0a
+		sta	dynptr+1
+		lda	zheader+$0b
+		clc
+		adc	#126-14
+		sta	dynptr
+		bcc	noc1
+
+		inc	dynptr+1
+noc1
+		lda	objnum
+		sta	temp3
+		lda	objnum+1
+		sta	temp3+1
+		asl	temp3+1
+		rol	temp3
+		asl	temp3+1
+		rol	temp3
+		asl	temp3+1
+		rol	temp3
+		lda	temp3+1
+		sec
+		sbc	objnum+1
+		sta	temp3+1
+		lda	temp3
+		sbc	objnum
+		sta	temp3
+		asl	temp3+1
+		rol	temp3
+
+		lda	dynptr
+		clc
+		adc	temp3+1
+		sta	dynptr
+		lda	dynptr+1
+		adc	temp3
+		sta	dynptr+1
+		rts
+		.)
+
+locate_proptable
+		; Input
+		;	operands+0, 16-bit non-zero object number
+		; Output
+		;	dynptr2, virtual address of property table
+
+		.(
+		lda	zheader+$0a
+		sta	dynptr+1
+		lda	zheader+$0b
+		clc
+		adc	#126-14+12
+		sta	dynptr
+		bcc	noc1
+
+		inc	dynptr+1
+noc1
+		lda	operands
+		sta	temp3
+		lda	operands+1
+		sta	temp3+1
+		asl	temp3+1
+		rol	temp3
+		asl	temp3+1
+		rol	temp3
+		asl	temp3+1
+		rol	temp3
+		lda	temp3+1
+		sec
+		sbc	operands+1
+		sta	temp3+1
+		lda	temp3
+		sbc	operands
+		sta	temp3
+		asl	temp3+1
+		rol	temp3
+
+		lda	dynptr
+		clc
+		adc	temp3+1
+		sta	dynptr
+		lda	dynptr+1
+		adc	temp3
+		sta	dynptr+1
+
+		tax
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	dynptr
+
+		lda	(phys_temp1),y
+		sta	dynptr2+1
+		iny
+		bne	noc2
+
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+noc2
+		lda	(phys_temp1),y
+		sta	dynptr2
+		rts
+		.)
+
+skip_to_properties
+		.(
+		ldx	dynptr2+1
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	dynptr2
+
+		lda	(phys_temp1),y
+		sec
+		rol
+		clc
+		adc	dynptr2
+		sta	dynptr2
+		bcc	noc1
+
+		inc	dynptr2+1
+noc1
+		rts
+		.)
+
+locate_property
+		; Input
+		;	operands+3, property number
+		;	operands+0, 16-bit object number
+		; Output
+		;	c set if found, with
+		;		dynptr2, virtual pointer to matching property data
+		;	c clear if not found
+
+#if PROP_PROF
+		.(
+		ldx	operands+1
+		lda	propproftbl,x
+		clc
+		adc	#1
+		bne	nosat
+
+		lda	#$ff
+nosat
+		sta	propproftbl,x
+		.)
+#endif
+
+		.(
+		lda	operands+0
+		cmp	cacheend+1
+		bcc	retrieve
+
+		bne	not_cached
+
+		lda	operands+1
+		cmp	cacheend
+		bcs	not_cached
+retrieve
+		lda	#0
+		sec
+		sbc	operands+1
+		sta	vaddr
+		lda	#0
+		sbc	operands
+		and	#$f
+		lsr
+		ora	#>virt2phys
+		sta	vaddr_bank
+		ror	vaddr
+		jsr	page_get
+		sta	temp3+1
+
+		lda	operands+1
+		lsr
+		lda	#0
+		ror
+		ora	operands+3
+		sta	temp3
+
+		ldy	#0
+		lda	(temp3),y
+		sta	dynptr2
+		ldy	#$40
+		lda	(temp3),y
+		sta	dynptr2+1
+		ora	dynptr2
+		beq	not_found
+
+		sec
+		rts
+not_found
+		clc
+		rts
+not_cached
+		lda	operands+0
+		cmp	cachemax+1
+		bcs	msb_ge
+		
+		jmp	grow_cache
+msb_ge
+		bne	not_cacheable
+
+		lda	operands+1
+		cmp	cachemax
+		bcs	not_cacheable
+
+		jmp	grow_cache
+
+not_cacheable
+		.)
+#if 0
+		.(
+		lda	operands+3
+		cmp	#4
+		bcs	locate_prop_linear
+
+		ldx	operands+0
+		bne	locate_prop_linear
+
+		ldx	operands+1
+
+		cmp	#3
+		beq	prop3
+
+		lda	prop3msb,x
+		beq	locate_prop_linear
+
+		sta	dynptr2+1
+		lda	prop3lsb,x
+		sta	dynptr2
+		lda	#2
+		jmp	locate_prop_linear2
+prop3
+		lda	prop3msb,x
+		bne	cached_found1
+
+		sta	dynptr2+1
+		lda	prop3lsb,x
+		beq	cached_notfound
+
+		cmp	#1
+		bne	cached_found2
+
+		jsr	locate_prop_linear
+		bcc	store_notfound
+
+		ldx	dynptr2+1
+		ldy	dynptr2
+		jsr	get_property_size
+		cpy	#2
+		bne	bailout
+
+		ldx	operands+1
+		lda	dynptr2
+		sta	prop3lsb,x
+		lda	dynptr2+1
+		sta	prop3msb,x
+bailout
+		sec
+		rts
+store_notfound
+		ldx	operands+1
+		lda	#0
+		sta	prop3lsb,x
+		sta	prop3msb,x
+		rts
+cached_notfound
+		clc
+		rts
+cached_found1
+		sta	dynptr2+1
+		lda	prop3lsb,x
+cached_found2
+		sta	dynptr2
+		sec
+		rts
+		.)
+#endif
+locate_prop_linear
+		.(
+		jsr	locate_proptable
+		jsr	skip_to_properties
+again
+		ldx	dynptr2+1
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	dynptr2
+
+		lda	(phys_temp1),y
+		tax
+		and	#$3f
+
+		cmp	operands+3
+		bcc	notfound
+
+		php
+
+		cpx	#$80
+		bcc	found_small
+
+		iny
+		bne	noc1
+
+		ldx	dynptr2+1
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+noc1
+		lda	(phys_temp1),y
+		and	#$3f
+		beq	size64
+
+		tay
+was64
+		lda	dynptr2
+		clc
+		adc	#2
+		sta	dynptr2
+		bcc	noc2
+
+		inc	dynptr2+1
+noc2
+		plp
+		beq	found
+next
+		tya
+#if 0
++locate_prop_linear2
+#endif
+		clc
+		adc	dynptr2
+		sta	dynptr2
+		bcc	again
+
+		inc	dynptr2+1
+		jmp	again
+size64
+		ldy	#$40
+		jmp	was64
+found_small
+		ldy	#1
+		cpx	#$40
+		bcc	not_2
+
+		iny
+not_2
+		inc	dynptr2
+		bne	noc3
+
+		inc	dynptr2+1
+noc3
+		plp
+		bne	next
+found
+		sec
+notfound
+		rts
+		.)
+
+get_property_size
+		; Input
+		;	X, msb of property data
+		;	Y, lsb of property data
+		;	z flag according to Y
+		; Output
+		;	Y, size
+		.(
+		bne	noc4
+
+		dex
+noc4
+		dey
+		sty	mod1+1
+
+		jsr	page_getdynx
+		sta	phys_temp1+1
+mod1		ldy	#0
+
+		lda	(phys_temp1),y
+		bmi	explicit
+
+		ldy	#1
+		and	#$40
+		beq	small2
+
+		iny
+small2
+		rts
+explicit
+		and	#$3f
+		bne	not64_2
+
+		lda	#$40
+not64_2
+		tay
+		rts
+		.)
+
+grow_cache
+		.(
+		; swap operands/cacheend, then increment cacheend
+
+		lda	operands+1
+		ldx	cacheend
+		clc
+		adc	#1
+		sta	cacheend
+		stx	operands+1
+		lda	operands
+		ldx	cacheend+1
+		adc	#0
+		sta	cacheend+1
+		stx	operands
+
+		; while operands != cacheend, cache properties of obj[operands]
+grow_loop
+		jsr	locate_proptable
+		jsr	skip_to_properties
+
+		lda	#0
+		tax
+clr
+		sta	cachebuf,x
+		inx
+		bpl	clr
+nextprop
+		ldx	dynptr2+1
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	dynptr2
+
+		lda	(phys_temp1),y
+		beq	propdone
+
+		bpl	small
+
+		and	#$3f
+		sta	temp3
+		iny
+		bne	noc1
+
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+noc1
+		lda	(phys_temp1),y
+		and	#$3f
+		bne	not64
+
+		lda	#$40
+not64
+have_size
+		iny
+		bne	noc2
+
+		inx
+noc2
+		sta	temp3+1
+
+		sty	dynptr2
+		stx	dynptr2+1
+
+		ldy	temp3
+		txa
+		sta	cachebuf+$40,y
+		lda	dynptr2
+		sta	cachebuf,y
+
+		lda	dynptr2
+		clc
+		adc	temp3+1
+		sta	dynptr2
+		bcc	nextprop
+
+		inc	dynptr2+1
+		jmp	nextprop
+small
+		cmp	#$40
+		bcc	not_2
+
+		and	#$3f
+		sta	temp3
+		lda	#2
+		jmp	have_size
+not_2
+		and	#$3f
+		sta	temp3
+		lda	#1
+		jmp	have_size
+propdone
+		lda	#0
+		sec
+		sbc	operands+1
+		sta	vaddr
+		lda	#0
+		sbc	operands
+		and	#$f
+		lsr
+		ora	#>virt2phys
+		sta	vaddr_bank
+		ror	vaddr
+		jsr	page_get
+		sta	temp3+1
+
+		tax
+		lda	vaddr_bank
+		sta	phys2virt_msb-PHYS_START,x	; mark as dirty
+
+		lda	operands+1
+		lsr
+		lda	#0
+		ror
+		sta	temp3
+
+		ldy	#0
+write
+		lda	cachebuf,y
+		sta	(temp3),y
+		iny
+		bpl	write
+
+		inc	operands+1
+		bne	noc3
+
+		inc	operands
+noc3
+		lda	operands
+		cmp	cacheend+1
+		bne	notgrown
+
+		lda	operands+1
+		cmp	cacheend
+		beq	grown
+notgrown
+		jmp	grow_loop
+grown
+		ldy	operands+3
+
+		lda	cachebuf,y
+		sta	dynptr2
+		lda	cachebuf+$40,y
+		sta	dynptr2+1
+		ora	dynptr2
+		beq	not_found
+
+		sec
+		rts
+not_found
+		clc
+		rts
+		.)
+
+locate_attr
+		; Input
+		;	dynptr, object table entry
+		;	A, attribute number
+		; Output
+		;	phys_temp1, pointer to memory page
+		;	Y, offset in page of attribute byte
+		;	A, attribute mask
+
+		.(
+		sta	mod1+1
+		lsr
+		lsr
+		lsr
+		ldx	dynptr+1
+		clc
+		adc	dynptr
+		sta	dynptr
+		bcc	noc1
+
+		inx
+noc1
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	dynptr
+
+mod1		lda	#0
+		and	#7
+		tax
+		lda	attrbits,x
+		rts
+attrbits
+		.byt	$80,$40,$20,$10,$08,$04,$02,$01
+		.)
+
+		.(
+negative
+		lda	#0
+		sec
+		sbc	operands+3
+		sta	operands+3
+		lda	#0
+		sbc	operands+2
+		sta	operands+2
+		beq	checkspecial
+
+		jmp	nospecial
++modulo_abs
+		lda	operands+2
+		bmi	negative
+
+		bne	nospecial
+checkspecial
+		ldx	operands+3
+		cpx	#8
+		bne	nospecial
+
+		sta	temp3
+		lda	operands+1
+		and	#7
+		sta	temp3+1
+		rts
++modulo
+		lda	operands+2
+		beq	checkspecial
+nospecial
+		lda	#0
+		sta	temp3
+		sta	temp3+1
+		ldx	#16
+divloop
+		asl	operands+1
+		rol	operands
+		rol	temp3+1
+		rol	temp3
+		lda	temp3+1
+		sec
+		sbc	operands+3
+		tay
+		lda	temp3
+		sbc	operands+2
+		bcc	skip
+
+		sta	temp3
+		sty	temp3+1
+skip
+		dex
+		bne	divloop	
+
+		rts
+		.)
+
+remove
+		.(
+		lda	operands
+		sta	objnum
+		lda	operands+1
+		sta	objnum+1
+		jsr	locate_object
+
+		; Destructively read out the parent field, storing it in objnum
+
+		lda	dynptr
+		ldx	dynptr+1
+		clc
+		adc	#6
+		sta	dynptr
+		bcc	noc1
+
+		inx
+noc1
+		stx	dynptr+1
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	dynptr
+
+		lda	(phys_temp1),y
+		sta	objnum
+		lda	#0
+		sta	(phys_temp1),y
+
+		iny
+		bne	noc2
+
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+noc2
+		lda	(phys_temp1),y
+		sta	objnum+1
+		ora	objnum
+		bne	not_orphan
+
+		rts
+not_orphan
+		lda	#0
+		sta	(phys_temp1),y
+
+		; Destructively read out the sibling field, storing it in dynptr2
+
+		iny
+		bne	noc3
+
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+noc3
+		lda	(phys_temp1),y
+		sta	dynptr2
+		lda	#0
+		sta	(phys_temp1),y
+
+		iny
+		bne	noc4
+
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+noc4
+		lda	(phys_temp1),y
+		sta	dynptr2+1
+		lda	#0
+		sta	(phys_temp1),y
+
+		; Locate the child field of the parent object
+
+		jsr	locate_object
+		lda	dynptr
+		clc
+		adc	#10
+		sta	dynptr
+		bcc	noc5
+
+		inc	dynptr+1
+noc5
+find_in_chain
+		; Were we located at this point in the sibling chain?
+
+		ldx	dynptr+1
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	dynptr
+
+		lda	(phys_temp1),y
+		sta	objnum
+
+		iny
+		bne	noc6
+
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+noc6
+		lda	(phys_temp1),y
+		sta	objnum+1
+
+		cmp	operands+1
+		bne	not_here
+
+		ldx	objnum
+		cpx	operands
+		beq	found
+not_here
+		ora	objnum
+		beq	not_in_list
+
+		; No, advance through chain
+
+		jsr	locate_object
+		lda	dynptr
+		clc
+		adc	#8
+		sta	dynptr
+		bcc	find_in_chain
+
+		inc	dynptr+1
+		jmp	find_in_chain
+found
+		; Yes, replace the reference with the value in dynptr2
+
+		lda	dynptr2+1
+		sta	(phys_temp1),y
+		dey
+		cpy	#$ff
+		bne	noc7
+
+		ldx	dynptr+1
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#$ff
+noc7
+		lda	dynptr2
+		sta	(phys_temp1),y
+not_in_list
+		rts
+		.)
+
+; ##################### Tokenisation #####################
+
+tokenise
+		; Input
+		;	inputbuf, text to tokenise
+		;	inputend, length of text
+		;	operands+2, 16-bit big-endian virtual pointer to parse buffer
+		;	dynptr, game/user dictionary
+		;	flag1, non-zero if we shouldn't write unrecognised words
+		.(
+		lda	operands+2
+		sta	vaddr
+		jsr	page_getdyn
+		sta	phys_temp1+1
+		ldy	operands+3
+		lda	(phys_temp1),y
+		sta	count1		; slots left in parse buffer
+
+		tya
+		clc
+		adc	#2
+		sta	dynptr2
+		lda	operands+2
+		adc	#0
+		sta	dynptr2+1	; dynptr2 points to next free slot in parse buffer
+
+		lda	dynptr+1
+		sta	vaddr
+		jsr	page_getdyn
+		sta	phys_temp1+1
+		ldy	dynptr
+		lda	(phys_temp1),y
+		sta	toknsep
+
+		iny
+		bne	nowrap1
+
+		inc	vaddr
+		jsr	page_getdyn
+		sta	phys_temp1+1
+		ldy	#0
+nowrap1
+		lda	toknsep
+		beq	nosep
+
+		ldx	#0
+readsep
+		lda	(phys_temp1),y
+		sta	tokbuf,x
+		inx
+
+		iny
+		bne	nowrap2
+
+		stx	temp3
+		inc	vaddr
+		jsr	page_getdyn
+		sta	phys_temp1+1
+		ldy	#0
+		ldx	temp3
+nowrap2
+		cpx	toknsep
+		bne	readsep
+nosep
+		lda	(phys_temp1),y
+		sta	dictentrylen
+		sta	temp3+2
+
+		iny
+		bne	nowrap3
+
+		inc	vaddr
+		jsr	page_getdyn
+		sta	phys_temp1+1
+		ldy	#0
+nowrap3
+		lda	(phys_temp1),y
+		sta	dictentries+1
+
+		iny
+		bne	nowrap4
+
+		inc	vaddr
+		jsr	page_getdyn
+		sta	phys_temp1+1
+		ldy	#0
+nowrap4
+		lda	(phys_temp1),y
+		sta	dictentries
+
+		ldx	vaddr
+		iny
+		bne	nowrap5
+
+		inx
+nowrap5
+		sty	dictbase
+		stx	dictbase+1
+
+		ldx	#1
+
+		lda	dictentries+1
+		bpl	noneg
+
+		lda	#0
+		sec
+		sbc	dictentries
+		sta	dictentries
+		lda	#0
+		sbc	dictentries+1
+		sta	dictentries+1
+		ldx	#0
+noneg
+		stx	dictordered
+
+		sta	temp3+1
+		lda	dictentries
+		sta	temp3
+
+		lda	#0
+		sta	dictsize
+		sta	dictsize+1
+
+		ldx	#8
+mulloop
+		lsr	temp3+2
+		bcc	noadd
+
+		lda	temp3
+		clc
+		adc	dictsize
+		sta	dictsize
+		lda	temp3+1
+		adc	dictsize+1
+		sta	dictsize+1
+noadd
+		asl	temp3
+		rol	temp3+1
+		dex
+		bne	mulloop
+
+		ldx	#0
+		stx	count2		; words produced so far
+		stx	inputpos	; current position in text buffer
+		stx	tokstart	; start of current word in text buffer
+tokloop
+		cpx	inputend
+		beq	done
+
+		lda	inputbuf,x
+		cmp	#$20
+		bne	notspace
+
+		jsr	tok_consider_word
+		ldx	inputpos
+		inx
+		stx	inputpos
+		stx	tokstart
+		jmp	tokloop
+notspace
+		ldy	#0
+nextsep
+		cpy	toknsep
+		beq	notsep
+
+		cmp	tokbuf,y
+		beq	sepfound
+
+		iny
+		jmp	nextsep
+sepfound
+		jsr	tok_consider_word
+		ldx	inputpos
+		stx	tokstart
+		inx
+		stx	inputpos
+		cpx	inputend
+		beq	done
+
+		jsr	tok_consider_word
+		ldx	inputpos
+		stx	tokstart
+		jmp	tokloop
+notsep
+		inx
+		stx	inputpos
+		jmp	tokloop
+done
+		jsr	tok_consider_word
+
+		inc	operands+3
+		bne	noc1
+
+		inc	operands+2
+noc1
+		lda	operands+2
+		sta	vaddr
+		jsr	page_getdyn
+		sta	phys_temp1+1
+		ldy	operands+3
+		lda	count2
+		sta	(phys_temp1),y
+
+		rts
+		.)
+
+tok_consider_word
+		.(
+		ldx	tokstart
+		cpx	inputpos
+		bne	notblank
+
+		rts
+notblank
+		; encode the word
+
+		lda	#0
+		sta	encodepos
+		sta	encodestate
+encloop
+		lda	inputbuf,x
+		beq	encdone
+
+		stx	temp3
+		jsr	encodechar
+		lda	encodepos
+		cmp	#6
+		beq	encdone
+
+		ldx	temp3
+		inx
+		cpx	inputpos
+		bne	encloop
+encdone
+		jsr	encodefill
+
+		jsr	dict_find
+
+		lda	count1
+		beq	bufferfull
+
+		lda	flag1
+		beq	noskip
+
+		lda	temp3+1
+		bne	noskip
+
+		lda	temp3
+		bne	noskip
+
+		lda	dynptr2
+		clc
+		adc	#4
+		sta	dynptr2
+		bcc	noc1
+
+		inc	dynptr2+1
+noc1
+		inc	count2
+		dec	count1
+		rts
+noskip
+		ldx	dynptr2+1
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	dynptr2
+
+		lda	temp3+1
+		sta	(phys_temp1),y
+
+		iny
+		bne	nowrap1
+
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+nowrap1
+		lda	temp3
+		sta	(phys_temp1),y
+
+		iny
+		bne	nowrap2
+
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+nowrap2
+		lda	inputpos
+		sec
+		sbc	tokstart
+		sta	(phys_temp1),y
+
+		iny
+		bne	nowrap3
+
+		inx
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	#0
+nowrap3
+		lda	tokstart
+		clc
++zvpatch4	adc	#2
+		sta	(phys_temp1),y
+
+		iny
+		bne	nowrap4
+
+		inx
+nowrap4
+		sty	dynptr2
+		stx	dynptr2+1
+
+		inc	count2
+		dec	count1
+bufferfull
+		rts
+		.)
+
+encodequintuple
+		.(
+		ldx	encodepos
+		cpx	#6
+		beq	full
+
+		ldy	encodestate
+		bne	not0
+state0
+		asl
+		asl
+		sta	tok_encoded,x
+
+		inc	encodestate	; not zero
+		rts
+
+not0
+		cpy	#1
+		bne	state2
+state1
+		pha
+		lsr
+		lsr
+		lsr
+		ora	tok_encoded,x
+		sta	tok_encoded,x
+
+		pla
+		asl
+		asl
+		asl
+		asl
+		asl
+		sta	tok_encoded+1,x
+
+		inc	encodestate	; not zero
+		rts
+state2
+		ora	tok_encoded+1,x
+		sta	tok_encoded+1,x
+
+		ldy	#0
+		sty	encodestate
+		inx
+		inx			; not zero
+		stx	encodepos
+full
+		rts
+		.)
+
+encodechar
+		.(
+		ldx	#0
+find
+		cmp	alphabet,x
+		beq	found
+
+		inx
+		cpx	#26*3
+		bne	find
+
+		pha
+		lda	#5
+		jsr	encodequintuple
+		lda	#0
+		jsr	encodequintuple
+		pla
+		pha
+		lsr
+		lsr
+		lsr
+		lsr
+		lsr
+		jsr	encodequintuple
+		pla
+		and	#$1f
+		jmp	encodequintuple
+found
+		cpx	#26*2
+		bcs	a2
+
+		cpx	#26
+		bcs	a1
+
+		txa
+		;clc
+		adc	#6
+		jmp	encodequintuple
+a1
+		txa
+		pha
+		lda	#4
+		jsr	encodequintuple
+		pla
+		clc
+		adc	#$100-26+6
+		jmp	encodequintuple
+a2
+		txa
+		pha
+		lda	#5
+		jsr	encodequintuple
+		pla
+		clc
+		adc	#$100-2*26+6
+		jmp	encodequintuple
+		.)
+
+encodefill
+		.(
+loop
+		lda	#5
+		jsr	encodequintuple
+		bne	loop
+
+		lda	tok_encoded+4
+		ora	#$80
+		sta	tok_encoded+4
+
+		rts
+		.)
+
+dict_find_linear
+		.(
+		lda	dictbase
+		sta	temp3
+		lda	dictbase+1
+		sta	temp3+1
+		lda	dictentries
+		sta	dictis		; use as down-counter
+		lda	dictentries+1
+		sta	dictis+1
+linloop
+		lda	dictis
+		ora	dictis+1
+		beq	not_found
+
+		lda	temp3+1
+		sta	vaddr
+		jsr	page_getdyn
+		sta	phys_temp1+1
+		ldy	temp3
+
+		ldx	#0
+lincmp
+		lda	(phys_temp1),y
+		cmp	tok_encoded,x
+		bne	linmismatch
+
+		iny
+		bne	nowrap1
+
+		stx	temp3+2
+		inc	vaddr
+		jsr	page_getdyn
+		sta	phys_temp1+1
+		ldy	#0
+		ldx	temp3+2
+nowrap1
+		inx
+		cpx	#6
+		bne	lincmp
+
+		rts			; match found
+linmismatch
+		lda	temp3
+		clc
+		adc	dictentrylen
+		sta	temp3
+		bcc	nowrap2
+
+		inc	temp3+1
+nowrap2
+		ldx	dictis
+		bne	nowrap3
+
+		dec	dictis+1
+nowrap3
+		dex
+		stx	dictis
+		jmp	linloop
+not_found
+		lda	#0
+		sta	temp3
+		sta	temp3+1
+		rts
+		.)
+
+dict_find
+		.(
+		lda	dictordered
+		beq	dict_find_linear
+
+		lda	#0
+		sta	dictis
+		sta	dictis+1
+		sta	dictos
+		sta	dictos+1
+		lda	dictentries
+		sta	dictie
+		lda	dictentries+1
+		sta	dictie+1
+		lda	dictsize
+		sta	dictoe
+		lda	dictsize+1
+		sta	dictoe+1
+search
+		lda	dictoe
+		sec
+		sbc	dictos
+		sta	dictop
+		lda	dictoe+1
+		sbc	dictos+1
+		sta	dictop+1
+
+		lda	dictie
+		sec
+		sbc	dictis
+		sta	dictip
+		lda	dictie+1
+		sbc	dictis+1
+		bmi	not_found
+
+		sta	dictip+1
+		ora	dictip
+		beq	not_found
+
+		lsr	dictip+1
+		ror	dictip
+		bcc	noadjust
+
+		lda	dictop
+		sec
+		sbc	dictentrylen
+		sta	dictop
+		bcs	noadjust
+
+		dec	dictop+1
+noadjust
+		lsr	dictop+1
+		ror	dictop
+
+		lda	dictop
+		clc
+		adc	dictos
+		sta	dictop
+		lda	dictop+1
+		adc	dictos+1
+		sta	dictop+1
+
+		lda	dictbase
+		clc
+		adc	dictop
+		sta	temp3
+		lda	dictbase+1
+		adc	dictop+1
+		sta	temp3+1
+
+		sta	vaddr
+		jsr	page_getdyn
+		sta	phys_temp1+1
+		ldy	temp3
+
+		ldx	#0
+bincmp
+		lda	(phys_temp1),y
+		cmp	tok_encoded,x
+		bcc	higher
+
+		bne	lower
+
+		iny
+		bne	nowrap1
+
+		stx	temp3+2
+		inc	vaddr
+		jsr	page_getdyn
+		sta	phys_temp1+1
+		ldy	#0
+		ldx	temp3+2
+nowrap1
+		inx
+		cpx	#6
+		bne	bincmp
+
+		rts			; match found
+not_found
+		lda	#0
+		sta	temp3
+		sta	temp3+1
+		rts
+higher
+		lda	dictip
+		sec
+		adc	dictis
+		sta	dictis
+		lda	dictip+1
+		adc	dictis+1
+		sta	dictis+1
+		lda	dictop
+		clc
+		adc	dictentrylen
+		sta	dictos
+		lda	dictop+1
+		adc	#0
+		sta	dictos+1
+		jmp	search
+lower
+		lda	dictip
+		clc
+		adc	dictis
+		sta	dictie
+		lda	dictip+1
+		adc	dictis+1
+		sta	dictie+1
+		lda	dictop
+		sta	dictoe
+		lda	dictop+1
+		sta	dictoe+1
+		jmp	search
+		.)
+
+tok_encoded	.dsb	6,0
+
+#if PROFILER
+
+prof_int
+		.(
+		sta	savea+1
+		lda	1
+		sta	save1+1
+		lda	#$35
+		sta	1
+		stx	savex+1
+		sty	savey+1
+		dec	$d020
+
+		lda	$dd0d
+
+#if PROFILE_VPC
+#if 1
+		lda	vpc1+2
+		and	#$07
+		sta	$d02f
+		lda	vpc1+1
+		sta	$d02f
+		lda	instrlsb
+		sta	$d02f
+		sta	$d030
+#else
+#if 1
+		lda	vpc1+2
+		and	#$07
+		ora	#$e0
+		sta	proftemp+1
+		lda	vpc1+1
+		sta	proftemp
+#else
+		lda	vpc1+2
+		and	#$07
+		ldx	#$e0
+
+		cmp	#3
+		bne	not3
+
+		lda	vpc1+1
+		cmp	#$a1
+		bne	cont
+
+		ldx	#$e4
+		jmp	cont
+not3
+		cmp	#2
+		bne	not2
+
+		lda	vpc1+1
+		ldx	#$e1
+		cmp	#$7a
+		beq	cont
+
+		inx
+		cmp	#$be
+		beq	cont
+
+		inx
+		cmp	#$c6
+		beq	cont
+
+		ldx	#$e0
+not2
+cont
+		stx	proftemp+1
+		lda	instrlsb
+		sta	proftemp
+#endif
+#endif
+
+		ldy	#0
+		lda	(proftemp),y
+		sec
+		adc	#0
+		bcc	noc
+
+		lda	#$ff
+noc
+		sta	(proftemp),y
+#else
+		tsx
+		inx
+		inx
+		lda	$100,x
+		sta	proftemp
+		inx
+		lda	$100,x
+		clc
+		adc	#>(proftable - $800)
+		bcs	skip
+
+		cmp	#$ff
+		beq	skip
+
+		sta	proftemp+1
+
+		ldy	#0
+		lda	(proftemp),y
+		sec
+		adc	#0
+		bcc	noc
+
+		lda	#$ff
+noc
+		sta	(proftemp),y
+skip
+#endif
+		ldx	#0
+		asl	prof_lfsr
+		rol	prof_lfsr+1
+		bpl	no7
+
+		inx
+no7
+		bit	prof_lfsr+1
+		bvc	no6
+
+		inx
+no6
+		txa
+		and	#1
+		beq	noinc
+
+		inc	prof_lfsr
+noinc
+		lda	prof_lfsr
+		sta	$dd04
+		lda	prof_lfsr+1
+		and	#$3f
+		ora	#$01
+		sta	$dd05
+		lda	#$99
+		sta	$dd0e
+
+savex		ldx	#0
+savey		ldy	#0
+		inc	$d020
+save1		lda	#0
+		sta	1
+savea		lda	#0
+		rti
+		.)
+#endif
+
+; ##################### Input #####################
+
+inp_readline
+		.(
+		jsr	disp_begin_input
+#if PROFILER
+		lda	prof_enable
+		beq	nodie
+
+		.byt	2
+nodie
+#endif
+
+loop
+		jsr	inp_readch
+		cmp	#13
+		beq	enter
+
+		cmp	#8
+		beq	rubout
+
+		cmp	#0
+		beq	interrupted
+
+		bmi	special
+
+		cmp	#32
+		bcc	loop
+
+		ldx	inputend
+		cpx	inputsize
+		beq	loop
+
+		sta	inputbuf,x
+		inx
+		stx	inputend
+
+		jsr	disp_putc
+		jsr	disp_refresh_cursor
+		jmp	loop
+rubout
+		ldx	inputend
+		beq	loop
+
+		dec	inputend
+		jsr	disp_rubout
+		jsr	disp_refresh_cursor
+		jmp	loop
+enter
+		jsr	disp_end_input
+#if PROFILER
+		sei
+		lda	#0
+		sta	framecounter
+		sta	framecounter+1
+		cli
+		lda	#1
+		sta	prof_enable
+		lda	#$81
+		inc	1
+		sta	$dd0d
+		dec	1
+#endif
+
+		lda	#10
+interrupted
+		rts
+special
+		sta	temp3
+
+		lda	zver
+		cmp	#5
+		bcc	loop
+
+		ldx	zheader+$2e
+		txa
+		ora	zheader+$2f
+		beq	loop
+
+		jsr	page_getdynx
+		sta	phys_temp1+1
+		ldy	zheader+$2f
+spec_next
+		lda	(phys_temp1),y
+		beq	loop
+
+		cmp	#$ff
+		beq	terminate
+
+		cmp	temp3
+		beq	terminate
+
+		jsr	nextdynxy
+		jmp	spec_next
+terminate
+		lda	temp3
+		rts
+		.)
+
+inp_more
+		.(
+		ldx	kb_wrpos
+		stx	kb_rdpos
+poll
+		cpx	kb_wrpos
+		beq	poll
+
+		inx
+		cpx	#KB_BUFSIZE
+		bne	nowrap
+
+		ldx	#0
+nowrap
+		stx	kb_rdpos
+		rts
+		.)
+
+inp_readch
+		.(
+		lda	#BLINKANIM
+		sta	blinkphase
+again
+		ldx	kb_rdpos
+poll
+		lda	ticksdue
+		bne	tick
+
+		cpx	kb_wrpos
+		beq	poll
+
+		ldy	kb_buf,x
+
+		inx
+		cpx	#KB_BUFSIZE
+		bne	nowrap
+
+		ldx	#0
+nowrap
+		stx	kb_rdpos
+
+		lda	keymap,y
+		beq	again
+
+		rts
+tick
+		lda	#0
+		sta	ticksdue
+
+		lda	timeout
+		ora	timeout+1
+		beq	again
+
+		lda	timeleft
+		bne	noc1
+
+		dec	timeleft+1
+		bmi	trigger
+noc1
+		dec	timeleft
+		jmp	again
+trigger
+		jsr	invoke_callback
+		jsr	disp_refresh_cursor
+		lda	result
+		ora	result+1
+		beq	again
+
+		lda	#0
+		rts
+		.)
+
+invoke_callback
+		.(
+		lda	in_readline
+		beq	norl1
+
+		jsr	export_inputbuf
+
+		lda	#0
+		sta	any_output
+norl1
+		ldx	#$f
+savelp
+		lda	operands,x
+		pha
+		dex
+		bpl	savelp
+
+		lda	vpc1+2
+		pha
+		lda	vpc1+1
+		pha
+		lda	virt_pc
+		pha
+
+		lda	#1
+		sta	in_callback
+
+		tsx
+		stx	readsp
+
+		lda	readpc+2
+		sta	vpc1+2
+		lda	readpc+1
+		sta	vpc1+1
+		ldy	readpc
+
+		lda	callback
+		sta	operands+1
+		lda	callback+1
+		sta	operands
+	;jmp	*
+		ldx	#2
+		jmp	op_call_vn
+		.)
+
+save_readpc_get_oper
+		.(
+		lda	in_callback
+		bne	return_from_callback
+
+		lda	vpc1+2
+		sta	readpc+2
+		lda	vpc1+1
+		sta	readpc+1
+		sty	readpc
+		tya
+		bne	noc1
+
+		lda	readpc+1
+		bne	noc2
+
+		dec	readpc+2
+noc2
+		dec	readpc+1
+noc1
+		dec	readpc
+
+		lda	(phys_pc),y
+		iny
+		beq	wrap1
+back1
+		jmp	fetch_operands
+wrap1
+		jsr	fetch_wrap
+		jmp	back1
+		.)
+
+return_from_callback
+		.(
+		ldx	readsp
+		txs
+
+		ldx	#0
+		stx	in_callback
+
+		pla
+		sta	virt_pc
+		pla
+		sta	vpc1+1
+		sta	vpc3+1
+		pla
+		sta	vpc1+2
+		sta	vpc3+2
+		jsr	refetch
+restorelp
+		pla
+		sta	operands,x
+		inx
+		cpx	#$10
+		bne	restorelp
+
+		lda	in_readline
+		beq	norl2
+
+		jsr	import_inputbuf
+
+		lda	any_output
+		beq	norl2
+
+		ldx	inputend
+		lda	#0
+		sta	inputbuf,x
+		ldx	#>inputbuf
+		ldy	#<inputbuf
+		jsr	print_ram
+norl2
+		lda	timeout
+		sta	timeleft
+		lda	timeout+1
+		sta	timeleft+1
+		rts
+		.)
+
+; ##################### Virtual memory, common routines #####################
+
+page_getdyn
+		; Input:
+		;	vaddr = vvvvvvvv, msb of virtual address in bank 0
+		; Output:
+		;	A = pppppppp, bits 8-15 of physical address
+
+		.(
+		ldx	vaddr
+		lda	virt2phys,x
+		beq	req
+
+		rts
+req
+		lda	#>virt2phys
+		sta	vaddr_bank
+		jmp	page_request
+		.)
+
+page_getdynx
+		; Input:
+		;	X = vvvvvvvv, msb of virtual address in bank 0
+		; Output:
+		;	A = pppppppp, bits 8-15 of physical address
+
+		.(
+		lda	virt2phys,x
+		beq	req
+
+		rts
+req
+		stx	vaddr
+		lda	#>virt2phys
+		sta	vaddr_bank
+		jmp	page_request
+		.)
+
+page_get
+		; Input:
+		;	vaddr = vvvvvvvv 00000vvv, high bits of virtual address (little-endian)
+		; Output:
+		;	A = pppppppp, bits 8-15 of physical address
+
+		ldx	vaddr
+vaddr_bank	= *+2
+		lda	!0,x
+		beq	page_request
+
+		rts
+
+; ##################### Virtual memory, C64 REU #####################
+
+page_init
+		lda	#0
+		sta	$df02	; c64 lsb
+		sta	$df04	; reu lsb
+		sta	$df09	; irq mask
+		sta	$df0a	; fix flags
+		sta	$df07	; length lsb
+		lda	#1
+		sta	$df08	; length msb
+		rts
+
+page_destroy
+		inc	1
+		lda	#0
+		sta	$df05
+		sta	$df06
+		lda	#PHYS_START
+		sta	$df03
+		lda	#$b0
+		sta	$df01
+		dec	1
+		rts
+
+page_request
+		; Input:
+		;	vaddr = vvvvvvvv, bits 8-15 of virtual address
+		;	vaddr_bank = 00111vvv, bits 16-18 of virtual address
+		; Output:
+		;	A = pppppppp, bits 8-15 of physical address
+		;	X = vaddr
+
+		.(
+		inc	1
+		dec	$d020
+
+		; Evict a page
+
+		ldx	next_evict
+		cpx	phys_pc+1		; protected from eviction
+		bne	noprot
+
+		inx
+		cpx	#PHYS_END
+		bne	no_wrap1
+
+		ldx	first_evict
+no_wrap1
+		stx	next_evict
+noprot
+		stx	$df03	; c64 msb
+		ldy	phys2virt_lsb-PHYS_START,x
+		lda	phys2virt_msb-PHYS_START,x
+		bmi	evict_done		; unused page
+
+		beq	dirty			; first 64k always dirty
+
+		cmp	#>virt2phys		; marked as dirty?
+		bcc	clean
+dirty
+		and	#7
+		sta	$df06	; reu bank
+		sty	$df05	; reu msb
+
+		lda	#$a0	; c64 -> reu
+		sta	$df01
+		dec	1
+		lda	$ff00
+		sta	$ff00
+		inc	1
+
+		; Mark evicted page as "in reu"
+
+		lda	phys2virt_msb-PHYS_START,x
+clean
+		ora	#>virt2phys
+		sta	mod3+2
+		lda	#0
+mod3		sta	!0,y
+evict_done
+		; Load a page
+
+		lda	vaddr_bank
+		and	#$07
+		sta	$df06	; reu bank
+		lda	vaddr
+		sta	$df05	; reu msb
+
+		lda	#$a1	; reu -> c64
+		sta	$df01
+		dec	1
+		lda	$ff00
+		sta	$ff00
+		inc	1
+
+		; Update tables
+
+		lda	vaddr
+		tay
+		sta	phys2virt_lsb-PHYS_START,x
+		lda	vaddr_bank
+		sta	mod2+2
+		and	#$07
+		sta	phys2virt_msb-PHYS_START,x
+
+		lda	next_evict
+mod2		sta	!0,y
+
+		tax
+		inx
+		cpx	#PHYS_END
+		bne	no_wrap
+
+		ldx	first_evict
+no_wrap
+		stx	next_evict
+
+		inc	$d020
+		dec	1
+
+		ldx	vaddr
+		rts
+		.)
+
+; ##################### Keyboard scanning, C64 #####################
+
+interrupt
+		.(
+		sta	savea+1
+		lda	1
+		sta	save1+1
+		lda	#$35
+		sta	1
+		stx	savex+1
+		sty	savey+1
+		;dec	$d020
+
+#if PROFILER
+		.(
+		inc	framecounter
+		bne	fc_noc
+
+		inc	framecounter+1
+fc_noc
+		.)
+#endif
+
+		.(
+		dec	frametime
+		bne	nonewdeci
+
+		dec	ticksdue
+
+		lda	blinkphase
+		asl
+		adc	#0
+		sta	blinkphase
+
+		ldx	#$6
+		and	#1
+		bne	blink
+
+		ldx	#$f
+blink
+		stx	$d027
+
+		lda	#5
+		sta	frametime
+nonewdeci
+		.)
+
+		.(
+		dec	kb_reptimer
+		bne	norep
+
+		lda	kb_repkey
+		bmi	norep
+
+		ora	kb_modifier
+		ldx	kb_wrpos
+		sta	kb_buf,x
+		inx
+		cpx	#KB_BUFSIZE
+		bne	nowrap
+
+		ldx	#0
+nowrap
+		stx	kb_wrpos
+
+		lda	#KB_REPEATRATE
+		sta	kb_reptimer
+norep
+		.)
+
+		.(
+		lda	#$00
+		sta	$dc00
+		nop
+again		
+		lda	$dc01
+		cmp	$dc01
+		bne	again
+
+		cmp	#$ff
+		bne	somepressed
+
+		lda	#$ff
+		sta	kb_repkey
+		ldx	#7
+loop
+		sta	kb_lastmatrix,x
+		dex
+		bpl	loop
+		
+		jmp	intret
+somepressed	
+		.)
+
+		.(
+		ldy	#0
+		lda	#$fe
+next		
+		sta	$dc00
+		nop
+again		
+		ldx	$dc01
+		cpx	$dc01
+		bne	again
+		stx	kb_matrix,y
+		sec
+		rol
+		iny
+		cpy	#8
+		bne	next
+		.)
+
+		.(
+		ldx	#$00
+		stx	kb_modifier
+		ldx	#$40
+		lda	kb_matrix+1
+		bmi	nolshift
+
+		stx	kb_modifier
+		ora	#$80
+		sta	kb_matrix+1
+nolshift
+		lda	kb_matrix+6
+		and	#$10
+		bne	norshift
+
+		stx	kb_modifier
+		lda	kb_matrix+6
+		ora	#$10
+		sta	kb_matrix+6
+norshift
+		.)
+
+		.(
+		lda	kb_repkey
+		bmi	nounrep
+
+		ldx	kb_reprow
+		and	#7
+		tay
+		lda	masktable,y
+		and	kb_matrix,x
+		beq	nounrep
+
+		lda	#$ff
+		sta	kb_repkey
+nounrep
+		.)
+
+		.(
+		ldy	#0
+		ldx	#0
+rowloop
+		lda	kb_lastmatrix,x
+		eor	#$ff
+		ora	kb_matrix,x
+
+		sec
+keyloop
+		ror
+		beq	nextrow
+		bcs	noevent
+
+		pha
+		sty	kb_repkey
+		stx	kb_reprow
+		lda	#KB_REPEATDELAY
+		sta	kb_reptimer
+		tya
+
+		ora	kb_modifier
+
+		ldx	kb_wrpos
+		sta	kb_buf,x
+		inx
+		cpx	#KB_BUFSIZE
+		bne	nowrap
+
+		ldx	#0
+nowrap
+		stx	kb_wrpos
+next
+		ldx	kb_reprow
+		pla
+noevent
+		iny
+		clc
+		bcc	keyloop
+nextrow
+		lda	kb_matrix,x
+		sta	kb_lastmatrix,x
+
+		inx
+		cpx	#8
+		bne	rowloop
+		.)
+intret
+
+savex		ldx	#0
+savey		ldy	#0
+		lsr	$d019
+		;inc	$d020
+save1		lda	#0
+		sta	1
+savea		lda	#0
++nmi_rti	rti
+masktable
+		.byt	$01,$02,$04,$08
+		.byt	$10,$20,$40,$80
+		.)
+kb_buf
+		.dsb	KB_BUFSIZE,0
+kb_lastmatrix
+		.dsb	8,0
+
+keymap
+		.byt	8, 13, 132, 132+7, 132+1, 132+3, 132+5, 130
+		.byt	'3', 'w', 'a', '4', 'z', 's', 'e', 0
+		.byt	'5', 'r', 'd', '6', 'c', 'f', 't', 'x'
+		.byt	'7', 'y', 'g', '8', 'b', 'h', 'u', 'v'
+		.byt	'9', 'i', 'j', '0', 'm', 'k', 'o', 'n'
+		.byt	"+pl-.:@,"
+		.byt	"\*;`", 0, "=^^/"
+		.byt	'1', 27, 0, '2', ' ', 0, 'q', 0
+
+		.byt	8, 13, 131, 132+8, 132+2, 132+4, 132+6, 129
+		.byt	'#', 'W', 'A', '$', 'Z', 'S', 'E', 0
+		.byt	'%', 'R', 'D', '&', 'C', 'F', 'T', 'X'
+		.byt	"'YG(BHUV"
+		.byt	')', 'I', 'J', '{', 'M', 'K', 'O', 'N'
+		.byt	'}', 'P', 'L', '_', '>', '[', '@', '<'
+		.byt	'|', '*', ']', '~', 0, '=', 0, '?'
+		.byt	'!', 27, 0, '"', ' ', 0, 'Q', 0
+
+
+; ##################### Decoding tables #####################
+
+		PAGE
+jumptbl_sh1op
+jumptbl_ext
+jumptbl_var
+		.word	op_illegal
+		.word	op_je
+		.word	op_jl
+		.word	op_jg
+		.word	op_dec_chk
+		.word	op_inc_chk
+		.word	op_jin
+		.word	op_test
+		.word	op_or
+		.word	op_and
+		.word	op_test_attr
+		.word	op_set_attr
+		.word	op_clear_attr
+		.word	op_store
+		.word	op_insert_obj
+		.word	op_loadw
+		.word	op_loadb
+		.word	op_get_prop
+		.word	op_get_prop_addr
+		.word	op_get_next_prop
+		.word	op_add
+		.word	op_sub
+		.word	op_mul
+		.word	op_div
+		.word	op_mod
+		.word	op_call_vs	; 2s
+		.word	op_call_vn	; 2n
+		.word	op_nop		; set_colour
+		.word	op_throw
+		.word	op_illegal
+		.word	op_illegal
+		.word	op_illegal
+
+		.word	$ffff
+		.word	op_storew
+		.word	op_storeb
+		.word	op_put_prop
+		.word	op_aread
+		.word	op_print_char
+		.word	op_print_num
+		.word	op_random
+		.word	op_push
+		.word	op_pull
+		.word	op_split_window
+		.word	op_set_window
+		.word	$ffff		; vs2
+		.word	op_erase_window
+		.word	op_erase_line
+		.word	op_set_cursor
+		.word	op_get_cursor
+		.word	op_set_text_style
+		.word	op_buffer_mode
+		.word	op_output_stream
+		.word	op_nop		; input_stream
+		.word	op_nop		; sound_effect
+		.word	op_read_char
+		.word	op_scan_table
+		.word	op_not
+		.word	$ffff
+		.word	$ffff		; vn2
+		.word	op_tokenise
+		.word	op_encode_text
+		.word	op_copy_table
+		.word	op_print_table
+		.word	op_check_arg_count
+
+		.word	op_jz
+		.word	op_get_sibling
+		.word	op_get_child
+		.word	op_get_parent
+		.word	op_get_prop_len
+		.word	op_inc
+		.word	op_dec
+		.word	op_print_addr
+		.word	op_call_vs	; 1s
+		.word	op_remove_obj
+		.word	op_print_obj
+		.word	op_ret
+		.word	op_jump
+		.word	op_print_paddr
+		.word	op_load
+jtpatch1	.word	op_call_vn	; not in v4, call_1n in v5
+
+		.word	op_ext_save
+		.word	op_ext_restore
+		.word	op_log_shift
+		.word	op_art_shift
+		.word	op_set_font
+		.word	op_nop		; draw_picture
+		.word	op_nop		; picture_data
+		.word	op_nop		; erase_picture
+		.word	op_nop		; set_margins
+		.word	op_save_undo
+		.word	op_restore_undo
+		.word	op_nop		; print_unicode
+		.word	op_check_unicode
+		.word	op_nop
+
+		PAGE
+
+jumptbl_decode0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	decode_store_l_sm_sm	; 0d
+		.word	generic0
+		.word	generic0
+
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	decode_store_l_sm_var	; 2d
+		.word	generic0
+		.word	generic0
+
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+
+		.word	generic0
+		.word	decode_je_l_var_sm	; 41
+		.word	decode_jl_l_var_sm	; 42
+		.word	decode_jg_l_var_sm	; 43
+		.word	generic0
+		.word	generic0
+		.word	decode_jin_l_var_sm	; 46
+		.word	generic0
+		.word	generic0
+		.word	decode_and_l_var_sm	; 49
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	decode_loadw_l_var_sm	; 4f
+
+		.word	generic0
+		.word	decode_getprop_l_var_sm	; 51
+		.word	generic0
+		.word	generic0
+		.word	decode_add_l_var_sm	; 54
+		.word	decode_sub_l_var_sm	; 55
+		.word	generic0
+		.word	decode_div_l_var_sm	; 57
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+
+		.word	decode_je_l_var_var	; 61
+		.word	generic0
+		.word	generic0
+		.word	decode_jg_l_var_var	; 63
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	decode_loadw_l_var_var	; 6f
+
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	decode_add_l_var_var	; 74
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+		.word	generic0
+
+		PAGE
+
+jumptbl_decode1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	decode_ret_sh_la	; 8b
+		.word	decode_jump_sh_la	; 8c
+		.word	generic1
+		.word	generic1
+		.word	generic1		; 8f not in v4, call_1n in v5, must be generic
+
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	decode_inc_sh_sm	; 95
+		.word	decode_dec_sh_sm	; 96
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1		; 9f not in v4, call_1n in v5, must be generic
+
+		.word	decode_jz_sh_var	; a0
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1		; af, not in v4, call_1n in v5, must be generic
+
+		.word	op_rtrue		; b0
+		.word	op_rfalse		; b1
+		.word	op_print		; b2
+		.word	op_print_ret		; b3
+		.word	op_nop			; b4
+		.word	op_save			; b5
+		.word	op_restore		; b6
+		.word	op_restart		; b7
+		.word	op_ret_popped		; b8
+jtpatch2	.word	op_catch		; b9, pop in v4, catch in v5
+		.word	op_quit			; ba
+		.word	op_new_line		; bb
+		.word	op_nop			; bc, show_status, actually illegal from v4
+		.word	branch_true		; bd, verify, trust that the loader has verified
+		.word	decode_extended		; be
+		.word	branch_true		; bf, piracy
+
+		.word	generic1
+		.word	decode_je_var		; c1
+		.word	decode_jl_var		; c2
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	decode_and_var		; c9
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	decode_loadw_var	; cf
+
+		.word	decode_loadb_var	; d0
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	decode_sub_var		; d5
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	decode_call_vs		; d9, call_2s var
+		.word	generic1
+		.word	decode_call_vn		; da, call_2n var
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+
+		.word	decode_call_vs		; e0, call_vs var
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	decode_aread		; e4, aread var
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	decode_call_vs2		; ec
+		.word	generic1
+		.word	generic1
+		.word	generic1
+
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	decode_read_char	; f6, read_char var
+		.word	generic1
+		.word	generic1
+		.word	decode_call_vn		; f9, call_vn var
+		.word	decode_call_vn2		; fa
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+		.word	generic1
+
+		PAGE
+
+jumptbl_oper
+		.byt	>generic_oper		; ff
+
+		.word	generic_oper		; 01
+		.word	generic_oper		; 03
+		.word	generic_oper		; 05
+		.word	generic_oper		; 07
+		.word	generic_oper		; 09
+		.word	generic_oper		; 0b
+		.word	generic_oper		; 0d
+		.word	generic_oper		; 0f
+
+		.word	generic_oper		; 11
+		.word	oper_large_small_large	; 13
+		.word	generic_oper		; 15
+		.word	generic_oper		; 17
+		.word	generic_oper		; 19
+		.word	generic_oper		; 1b
+		.word	generic_oper		; 1d
+		.word	generic_oper		; 1f
+
+		.word	generic_oper		; 21
+		.word	generic_oper		; 23
+		.word	generic_oper		; 25
+		.word	generic_oper		; 27
+		.word	generic_oper		; 29
+		.word	oper_large_var_var	; 2b
+		.word	generic_oper		; 2d
+		.word	oper_large_var		; 2f
+
+		.word	generic_oper		; 31
+		.word	generic_oper		; 33
+		.word	generic_oper		; 35
+		.word	generic_oper		; 37
+		.word	generic_oper		; 39
+		.word	generic_oper		; 3b
+		.word	generic_oper		; 3d
+		.word	generic_oper		; 3f
+
+		.word	generic_oper		; 41
+		.word	generic_oper		; 43
+		.word	generic_oper		; 45
+		.word	generic_oper		; 47
+		.word	generic_oper		; 49
+		.word	generic_oper		; 4b
+		.word	generic_oper		; 4d
+		.word	generic_oper		; 4f
+
+		.word	generic_oper		; 51
+		.word	generic_oper		; 53
+		.word	generic_oper		; 55
+		.word	generic_oper		; 57
+		.word	generic_oper		; 59
+		.word	generic_oper		; 5b
+		.word	generic_oper		; 5d
+		.word	oper_small_small	; 5f
+
+		.word	generic_oper		; 61
+		.word	generic_oper		; 63
+		.word	generic_oper		; 65
+		.word	generic_oper		; 67
+		.word	generic_oper		; 69
+		.word	generic_oper		; 6b
+		.word	generic_oper		; 6d
+		.word	generic_oper		; 6f
+
+		.word	generic_oper		; 71
+		.word	generic_oper		; 73
+		.word	generic_oper		; 75
+		.word	generic_oper		; 77
+		.word	generic_oper		; 79
+		.word	generic_oper		; 7b
+		.word	generic_oper		; 7d
+		.word	oper_small		; 7f
+
+		.word	generic_oper		; 81
+		.word	generic_oper		; 83
+		.word	generic_oper		; 85
+		.word	generic_oper		; 87
+		.word	generic_oper		; 89
+		.word	generic_oper		; 8b
+		.word	generic_oper		; 8d
+		.word	oper_var_large		; 8f
+
+		.word	generic_oper		; 91
+		.word	generic_oper		; 93
+		.word	generic_oper		; 95
+		.word	generic_oper		; 97
+		.word	generic_oper		; 99
+		.word	generic_oper		; 9b
+		.word	generic_oper		; 9d
+		.word	generic_oper		; 9f
+
+		.word	generic_oper		; a1
+		.word	generic_oper		; a3
+		.word	generic_oper		; a5
+		.word	generic_oper		; a7
+		.word	generic_oper		; a9
+		.word	generic_oper		; ab
+		.word	generic_oper		; ad
+		.word	generic_oper		; af
+
+		.word	generic_oper		; b1
+		.word	generic_oper		; b3
+		.word	generic_oper		; b5
+		.word	generic_oper		; b7
+		.word	generic_oper		; b9
+		.word	generic_oper		; bb
+		.word	generic_oper		; bd
+		.word	generic_oper		; bf
+
+		.word	generic_oper		; c1
+		.word	generic_oper		; c3
+		.word	generic_oper		; c5
+		.word	generic_oper		; c7
+		.word	generic_oper		; c9
+		.word	generic_oper		; cb
+		.word	generic_oper		; cd
+		.word	generic_oper		; cf
+
+		.word	generic_oper		; d1
+		.word	generic_oper		; d3
+		.word	generic_oper		; d5
+		.word	generic_oper		; d7
+		.word	generic_oper		; d9
+		.word	generic_oper		; db
+		.word	generic_oper		; dd
+		.word	generic_oper		; df
+
+		.word	generic_oper		; e1
+		.word	generic_oper		; e3
+		.word	generic_oper		; e5
+		.word	generic_oper		; e7
+		.word	generic_oper		; e9
+		.word	generic_oper		; eb
+		.word	generic_oper		; ed
+		.word	generic_oper		; ef
+
+		.word	generic_oper		; f1
+		.word	generic_oper		; f3
+		.word	generic_oper		; f5
+		.word	generic_oper		; f7
+		.word	generic_oper		; f9
+		.word	generic_oper		; fb
+		.word	generic_oper		; fd
+
+		.byt	<generic_oper		; ff
+
+#if * >= $3e00
+#echo code too large
+#endif
+
+; ##################### Initialisation #####################
+
+; (May be overwritten, but this doesn't happen in the current implementation)
+
+initialise
+		sei
+		lda	#$35
+		sta	1
+
+		lda	#$ff
+		sta	$dc05
+		sta	$dc04
+		lda	#$81
+		sta	$dc0e
+		lda	#0
+		sta	randomflag
+
+		.(
+		ldx	#zpcode1len - 1
+loop
+		lda	zpcode1,x
+		sta	!ZPORG,x
+		dex
+		bpl	loop
+		.)
+
+		.(
+		ldx	#zpcode2len - 1
+loop
+		lda	zpcode2,x
+		sta	!ZPORG2,x
+		dex
+		bpl	loop
+		.)
+
+
+		lda	#$55
+		sta	lfsr
+		sta	lfsr+1
+
+#if PROFILER || OP_PROF || OPER_PROF
+		.(
+		ldx	#0
+		ldy	#32
+		txa
+loop
+		sta	proftable,x
+		inx
+		bne	loop
+
+		inc	loop+2
+		dey
+		bne	loop
+		.)
+#endif
+
+#if PROFILER
+		lda	#$55
+		sta	prof_lfsr
+		sta	prof_lfsr+1
+
+		lda	#<prof_int
+		sta	$fffa
+		lda	#>prof_int
+		sta	$fffb
+		lda	#100
+		sta	$dd04
+		lda	#0
+		sta	prof_enable
+		sta	$dd05
+		lda	#$99
+		sta	$dd0e
+	;lda	#$81
+	;sta	$dd0d
+
+		lda	#0
+		sta	framecounter
+		sta	framecounter+1
+#endif
+		lda	#0
+		sta	kb_rdpos
+		sta	kb_wrpos
+		sta	kb_modifier
+		lda	#$ff
+		sta	kb_repkey
+
+		lda	#<nmi_rti
+		sta	$fffa
+		lda	#>nmi_rti
+		sta	$fffb
+		lda	#<interrupt
+		sta	$fffe
+		lda	#>interrupt
+		sta	$ffff
+		lda	#$ff
+		sta	$d012
+		lda	#$1b
+		sta	$d011
+		lda	#$01
+		sta	$d01a
+		lda	#$7f
+		sta	$dc0d
+		lda	$dc0d
+		lsr	$d019
+		cli
+
+		.(
+		ldy	#8
+		ldx	#0
+		txa
+loop
+		sta	virt2phys,x
+		inx
+		bne	loop
+
+		inc	loop+2
+		dey
+		bne	loop
+		.)
+
+		.(
+		ldx	#$7f
+		lda	#$80
+loop
+		sta	phys2virt_msb,x
+		dex
+		bpl	loop
+		.)
+
+		lda	#0
+		sta	words_pushed
+#if TRACER
+		sta	traceptr
+#endif
+#if PROP_PROF
+		.(
+		sta	propprofptr
+		tax
+loop
+		sta	propproftbl,x
+		inx
+		bne	loop
+		.)
+#endif
+
+		sta	phys_pc
+		sta	phys_temp1
+		sta	phys_ea_msb
+
+#if 0
+		.(
+		tax
+loop1
+		sta	prop3msb,x
+		inx
+		bne	loop1
+
+		lda	#1
+loop2
+		sta	prop3lsb,x
+		inx
+		bne	loop2
+		.)
+#endif
+
+		lda	#1
+		sta	cacheend
+		lda	#0
+		sta	cacheend+1
+
+		sta	in_readline
+		sta	in_callback
+
+		lda	#5
+		sta	frametime
+		lda	#BLINKANIM
+		sta	blinkphase
+
+		lda	#>callstack_lsb
+		sta	stackframe_lsb+1
+		lda	#>callstack_msb
+		sta	stackframe_msb+1
+		lda	#<callstack_lsb
+		sta	stackframe_lsb
+		sta	stackframe_msb
+
+		lda	#$ff
+		sta	stream3level
+		lda	#1
+		sta	stream1on
+
+		jsr	page_init
+
+		dec	1
+
+		jsr	disp_init
+
+		ldx	#>txt_version
+		ldy	#<txt_version
+		jsr	print_ram
+
+		lda	#PHYS_START
+		sta	next_evict
+		ldx	#0
+		jsr	page_getdynx
+
+		; Adapt property cache to core size
+
+		lda	#0
+		sec
+		sbc	zheader+$1b
+		sta	cachemax
+		lda	#0
+		sbc	zheader+$1a
+		sta	cachemax+1
+
+		lsr	cachemax+1
+		ror	cachemax
+		lsr	cachemax+1
+		ror	cachemax
+		lsr	cachemax+1
+		ror	cachemax
+		lsr	cachemax+1
+		ror	cachemax
+
+		; Check version
+
+		.(
+		lda	zheader+$00
+		sta	zver
+		cmp	#4
+		beq	was_v4
+
+		pha
+
+		; Font size
+
+		lda	#1
+		sta	zheader+$26
+		sta	zheader+$27
+
+		; Screen size in units
+
+		lda	#0
+		sta	zheader+$22
+		lda	#CLAIMED_WIDTH
+		sta	zheader+$23
+		lda	#0
+		sta	zheader+$24
+		lda	#25
+		sta	zheader+$25
+
+		; Default colours
+
+		lda	#$9		; white
+		sta	zheader+$2c
+		lda	#$2		; black
+		sta	zheader+$2d
+
+		pla
+
+		cmp	#5
+		beq	was_v5
+
+		cmp	#8
+		beq	was_v8
+
+		cmp	#$41
+		bne	not_clobbered
+
+		ldx	#>txt_clobbered
+		ldy	#<txt_clobbered
+		jsr	print_ram
+		jmp	*
+not_clobbered
+		sta	operands+1
+		lda	#0
+		sta	operands
+		ldx	#>txt_badver1
+		ldy	#<txt_badver1
+		jsr	print_ram
+		jsr	print_num
+		ldx	#>txt_badver2
+		ldy	#<txt_badver2
+		jsr	print_ram
+		jmp	*
+was_v4
+		lda	#<op_not
+		sta	jtpatch1
+		lda	#>op_not
+		sta	jtpatch1+1
+
+		lda	#<op_pop
+		sta	jtpatch2
+		lda	#>op_pop
+		sta	jtpatch2+1
+
+		lda	#$4c	; jmp
+		sta	v4call_patch
+		lda	#<v4call
+		sta	v4call_patch+1
+		lda	#>v4call
+		sta	v4call_patch+2
+
+		lda	#1
+		sta	zvpatch4+1
+
+		jmp	was_4_or_5
+was_v5
+
+was_4_or_5
+		lsr	cachemax+1
+		ror	cachemax
+
+		asl	zvpatch1+1
+
+		lda	#$4c
+		sta	zvpatch2
+		sta	zvpatch3
+		lda	#<zvpatch2+5
+		sta	zvpatch2+1
+		lda	#>zvpatch2+5
+		sta	zvpatch2+2
+		lda	#<zvpatch3+5
+		sta	zvpatch3+1
+		lda	#>zvpatch3+5
+		sta	zvpatch3+2
+was_v8
+version_ok
+		lda	#$41
+		sta	zheader+$00	; standard mandates that calls to address 0 return false
+		.)
+
+		; Destroy header in REU to prevent accidental playing
+		; of corrupt game image.
+
+		jsr	page_destroy
+
+		; Flags 1
+
+		lda	#$84		; no colours, timed input, no styles except bold
+		sta	zheader+$01
+
+		; Flags 2
+
+		lda	zheader+$11
+		and	#$47		; turn off pictures, undo, mouse and sound
+		sta	zheader+$11
+		lda	zheader+$10
+		and	#$fe		; turn off menus
+		sta	zheader+$10
+
+		; Declare interpreter information
+
+		lda	#8		; commodore 64
+		sta	zheader+$1e
+		lda	#42
+		sta	zheader+$1f
+
+		; Screen size in characters
+
+		lda	#25
+		sta	zheader+$20
+		lda	#CLAIMED_WIDTH
+		sta	zheader+$21
+
+#if 0
+	; These numbers can be modified in order to mimic the
+	; environment of another interpreter, so that the two
+	; interpreters should visit the same program locations
+	; in the same order when given the same story file and
+	; input.
+
+	lda	#1
+	sta	zheader+$32	; standard revision
+
+	lda	#$8c
+	sta	zheader+$01
+
+	lda	#65
+	sta	zheader+$20
+	sta	zheader+$25
+	lda	#212
+	sta	zheader+$21
+	sta	zheader+$23
+#endif
+
+		; Map the globals table in contiguous physical RAM
+
+		.(
+		ldx	zheader+$0c
+		lda	zheader+$0d
+		sta	phys_globals
+		jsr	page_getdynx
+		sta	phys_globals+1
+		tay
+		iny
+		sty	phys_globals2+1
+
+		lda	#2
+		sta	count1
+loop
+		inx
+		jsr	page_getdynx
+
+		dec	count1
+		bne	loop
+
+		lda	phys_globals
+		sec
+		sbc	#$20
+		sta	phys_globals
+		sta	phys_globals2
+		bcs	noc1
+
+		dec	phys_globals+1
+		dec	phys_globals2+1
+noc1
+		.)
+
+		; Lock all pages mapped so far
+
+		lda	next_evict
+		sta	first_evict
+
+		; Custom alphabet?
+
+		.(
+		lda	zver
+		cmp	#4
+		beq	noalpha
+
+		lda	zheader+$34
+		ora	zheader+$35
+		beq	noalpha
+
+		ldx	zheader+$34
+		stx	vaddr
+		jsr	page_getdyn
+		sta	phys_temp1+1
+		ldy	zheader+$35
+		ldx	#0
+		stx	count1
+loop
+		lda	(phys_temp1),y
+		sta	alphabet,x
+
+		iny
+		bne	nowrap
+
+		inc	vaddr
+		jsr	page_getdyn
+		sta	phys_temp1+1
+		ldy	#0
+nowrap
+		ldx	count1
+		inx
+		stx	count1
+		cpx	#3*26
+		bne	loop
+
+		lda	#$0d
+		sta	alphabet+2*26+1
+noalpha
+		.)
+
+		; Seed random number generator
+
+		jsr	randomise
+
+		; Get initial PC
+
+		lda	#>virt2phys
+		sta	vpc1+2
+		sta	vpc3+2
+		lda	zheader+$06
+		sta	vpc1+1
+		sta	vpc3+1
+		ldy	zheader+$07
+
+		jmp	fetch_op_anywhere
+txt_badver1
+		.byt	"Z-machine version ",0
+txt_badver2
+		.byt	" not supported. ",0
+txt_clobbered
+		.byt	"Clobbered data detected in REU. "
+		.byt	"The story file must be loaded again.",13,0
+txt_version
+		.byt	"Zeugma C64 REU v1.2 by Linus 'lft' Akesson",13
+		.byt	"http:",$2f,$2f,"www.linusakesson.net/software/zeugma/",13,13
+		.byt	"This program is free software.",13,13
+		.byt	"Copyright notice for the font, Schumacher Clean 6x8:",13
+		.byt	"Copyright 1989 Dale Schumacher, dal@syntel.mn.org",13
+		.byt	"               399 Beacon Ave.",13
+		.byt	"               St. Paul, MN  55104-3527",13,13,0
+
+; ##################### C64 Bitmap Display - Font data #####################
+
+		.dsb	$7ff - ((* - 1) & $7ff), $ee
+
+fontbits
+		.bin	0,0,"font.bin"
+
+; ##################### C64 Bitmap Display - Tables and code #####################
+
+; (Must be page-aligned)
+
+jumptbl_plot
+		.word	plot0
+		.word	plot2
+		.word	plot4
+		.word	plot6
+row_lsb
+		.byt	<bmstart+0*320
+		.byt	<bmstart+1*320
+		.byt	<bmstart+2*320
+		.byt	<bmstart+3*320
+		.byt	<bmstart+4*320
+		.byt	<bmstart+5*320
+		.byt	<bmstart+6*320
+		.byt	<bmstart+7*320
+		.byt	<bmstart+8*320
+		.byt	<bmstart+9*320
+		.byt	<bmstart+10*320
+		.byt	<bmstart+11*320
+		.byt	<bmstart+12*320
+		.byt	<bmstart+13*320
+		.byt	<bmstart+14*320
+		.byt	<bmstart+15*320
+		.byt	<bmstart+16*320
+		.byt	<bmstart+17*320
+		.byt	<bmstart+18*320
+		.byt	<bmstart+19*320
+		.byt	<bmstart+20*320
+		.byt	<bmstart+21*320
+		.byt	<bmstart+22*320
+		.byt	<bmstart+23*320
+		.byt	<bmstart+24*320
+		.byt	<bmstart+25*320
+row_msb
+		.byt	>bmstart+0*320
+		.byt	>bmstart+1*320
+		.byt	>bmstart+2*320
+		.byt	>bmstart+3*320
+		.byt	>bmstart+4*320
+		.byt	>bmstart+5*320
+		.byt	>bmstart+6*320
+		.byt	>bmstart+7*320
+		.byt	>bmstart+8*320
+		.byt	>bmstart+9*320
+		.byt	>bmstart+10*320
+		.byt	>bmstart+11*320
+		.byt	>bmstart+12*320
+		.byt	>bmstart+13*320
+		.byt	>bmstart+14*320
+		.byt	>bmstart+15*320
+		.byt	>bmstart+16*320
+		.byt	>bmstart+17*320
+		.byt	>bmstart+18*320
+		.byt	>bmstart+19*320
+		.byt	>bmstart+20*320
+		.byt	>bmstart+21*320
+		.byt	>bmstart+22*320
+		.byt	>bmstart+23*320
+		.byt	>bmstart+24*320
+		.byt	>bmstart+25*320
+
+disp_init
+		.(
+		inc	1
+
+		lda	#0
+		sta	style
+		sta	boldflag
+		sta	revmask
+		sta	currwindow
+		sta	upperheight
+		sta	unread_lines
+		sta	l_column
+		sta	outputpos
+		lda	#$80
+		sta	buffermode
+		lda	#$3b
+		sta	$d011
+		lda	#$08
+		sta	$d016
+		lda	#$38
+		sta	$d018
+		lda	#$f
+		sta	$d020
+		lda	#0
+		sta	$dd00
+		lda	#$3d
+		sta	$dd02
+		.(
+		ldx	#0
+		lda	#$0f
+loop
+		sta	vmstart+$000,x
+		sta	vmstart+$100,x
+		sta	vmstart+$200,x
+		sta	vmstart+$300,x
+		inx
+		bne	loop
+		.)
+
+		.(
+		ldx	#$3e
+		lda	#0
+loop
+		sta	bmstart+$1fc0,x
+		dex
+		bpl	loop
+
+		lda	#$f8
+		sta	bmstart+$1fc0
+		sta	bmstart+$1fc3
+		sta	bmstart+$1fc6
+		sta	bmstart+$1fc9
+		sta	bmstart+$1fcc
+		sta	bmstart+$1fcf
+		sta	bmstart+$1fd2
+		.)
+
+		lda	#$ff
+		sta	vmstart+$3f8
+		lda	#$f
+		sta	$d027
+		lda	#$00
+		sta	$d017
+		sta	$d01b
+		sta	$d01c
+		sta	$d01d
+
+		dec	1
+
+		lda	#$ff
+		jsr	disp_erase_window
+
+		.(
+		ldy	#logorows
+		ldx	#0
+loop
+		lda	logodata,x
+mod		sta	bmstart,x
+		inx
+		bne	loop
+
+		inc	loop+2
+		lda	mod+1
+		clc
+		adc	#<320
+		sta	mod+1
+		lda	mod+2
+		adc	#>320
+		sta	mod+2
+
+		dey
+		bne	loop
+		.)
+
+		ldx	#4
+		stx	unread_lines
+		stx	l_row
+		lda	row_lsb,x
+		sta	l_charptr
+		lda	row_msb,x
+		sta	l_charptr+1
+		lda	#0
+		sta	l_xoffs
+		sta	l_column
+		lda	#WIDTH
+		sta	l_left
+
+		rts
+		.)
+
+disp_buffermode
+		.(
+		cmp	#0
+		beq	was0
+
+		lda	#$ff
+was0
+		sta	buffermode
+		jsr	flushbuffer
+		lda	#0
+		sta	spaceleft
+		rts
+		.)
+
+disp_erase_window
+		.(
+		pha
+		jsr	flushbuffer
+		lda	#WIDTH
+		sta	spaceleft
+		pla
+
+		cmp	#$ff
+		beq	reset
+
+		cmp	#$fe
+		beq	both
+
+		cmp	#0
+		bne	upper
+lower
+		jsr	more_if_anything
+
+		ldx	upperheight
+		lda	zver
+		cmp	#5
+		bcs	v5
+
+		ldx	#24
+v5
+		stx	l_row
+		lda	row_lsb,x
+		sta	l_charptr
+		lda	row_msb,x
+		sta	l_charptr+1
+		lda	#0
+		sta	l_xoffs
+		sta	l_column
+		lda	#WIDTH
+		sta	l_left
+
+		ldx	upperheight
+lloop
+		jsr	clearrow
+		inx
+		cpx	#25
+		bcc	lloop
+
+		rts
+upper
+		ldx	#0
+		stx	u_row
+		lda	row_lsb,x
+		sta	u_charptr
+		lda	row_msb,x
+		sta	u_charptr+1
+		lda	#0
+		sta	u_xoffs
+		sta	u_column
+		lda	#WIDTH
+		sta	u_left
+		cpx	upperheight
+		beq	noupper
+uloop
+		jsr	clearrow
+		inx
+		cpx	upperheight
+		bcc	uloop
+noupper
+		rts
+reset
+		jsr	more_if_anything
+
+		lda	#0
+		sta	upperheight
+		sta	currwindow
+both
+		jsr	upper
+		jmp	lower
+		.)
+
+disp_get_cursor
+		.(
+		lda	currwindow
+		bne	upper
+
+		jsr	flushbuffer
+
+		ldx	l_column
+		ldy	l_row
+		rts
+upper
+		ldx	u_column
+		ldy	u_row
+		rts
+		.)
+
+clearrow
+		.(
+		inc	1
+
+		lda	#<320
+		sta	$df07
+		lda	#>320
+		sta	$df08
+
+		lda	#ZEROREU
+		sta	$df04
+		lda	#0
+		sta	$df05
+		sta	$df06
+
+		lda	row_lsb,x
+		sta	$df02
+		lda	row_msb,x
+		sta	$df03
+
+		lda	#$40
+		sta	$df0a
+
+		lda	#$91
+		sta	$df01
+
+		lda	#0
+		sta	$df0a
+		sta	$df02
+		sta	$df04
+		sta	$df07
+		lda	#1
+		sta	$df08
+
+		dec	1
+		rts
+		.)
+
+more_if_anything
+		.(
+		lda	unread_lines
+		cmp	#3
+		bcs	moreprompt
+
+		rts
+		.)
+more_if_full
+		.(
+		lda	unread_lines
+		clc
+		adc	upperheight
+		cmp	#HEIGHT - 1
+		bcs	moreprompt
+
+		rts
+		.)
+moreprompt
+		.(
+		lda	#2
+		sta	unread_lines
+
+		lda	#'['
+		jsr	real_putc_lower
+		lda	#'m'
+		jsr	real_putc_lower
+		lda	#'o'
+		jsr	real_putc_lower
+		lda	#'r'
+		jsr	real_putc_lower
+		lda	#'e'
+		jsr	real_putc_lower
+		lda	#']'
+		jsr	real_putc_lower
+
+		jsr	disp_refresh_cursor
+		jsr	inp_more
+		jsr	disp_disable_cursor
+
+		jsr	disp_rubout
+		jsr	disp_rubout
+		jsr	disp_rubout
+		jsr	disp_rubout
+		jsr	disp_rubout
+		jmp	disp_rubout
+		.)
+
+disp_erase_line
+		.(
+		lda	currwindow
+		beq	done
+
+		lda	u_left
+		pha
+		lda	u_charptr
+		pha
+		lda	u_charptr+1
+		pha
+		lda	u_xoffs
+		pha
+		lda	u_column
+		pha
+loop
+		lda	#$20
+		jsr	real_putc_upper
+		lda	u_left
+		bne	loop
+
+		pla
+		sta	u_column
+		pla
+		sta	u_xoffs
+		pla
+		sta	u_charptr+1
+		pla
+		sta	u_charptr
+		pla
+		sta	u_left
+done
+		rts
+		.)
+
+disp_set_window
+		.(
+		sta	currwindow
+		cmp	#1
+		bne	done
+
+		jsr	flushbuffer
+
+		ldx	#0
+		stx	u_row
+		lda	row_lsb,x
+		sta	u_charptr
+		lda	row_msb,x
+		sta	u_charptr+1
+		lda	#0
+		sta	u_xoffs
+		sta	u_column
+		lda	#WIDTH
+		sta	u_left
+done
+		rts
+		.)
+
+disp_split_window
+		.(
+		pha
+		jsr	flushbuffer
+		pla
+
+		cmp	#24
+		bcc	nosat
+
+		lda	#23
+nosat
+		pha
+
+		clc
+		adc	unread_lines
+		cmp	#HEIGHT - 1
+		bcc	nohide
+
+		jsr	moreprompt
+nohide
+		pla
+
+		sta	upperheight
+		tax
+		beq	unsplit
+
+		dex
+		cpx	l_row
+		bcc	noswallow
+
+		sta	l_row
+		tax
+		lda	row_lsb,x
+		sta	l_charptr
+		lda	row_msb,x
+		sta	l_charptr+1
+		lda	#0
+		sta	l_xoffs
+		sta	l_column
+		lda	#WIDTH
+		sta	spaceleft
+		sta	l_left
+noswallow
+		rts
+unsplit
+		;lda	#0
+		sta	currwindow
+		rts
+		.)
+
+disp_set_cursor
+		.(
+		lda	currwindow
+		beq	done
+
+		dex
+		cpx	#WIDTH
+		bcc	noneg
+
+		ldx	#0
+noneg
+		dey
+		cpy	upperheight
+		bcc	inside
+
+		cpy	#HEIGHT - 1
+		bcs	invalid
+
+		txa
+		pha
+		tya
+		pha
+		jsr	disp_split_window
+		pla
+		tay
+		pla
+		tax
+inside
+		sty	u_row
+
+		lda	row_lsb,y
+		sta	u_charptr
+		lda	row_msb,y
+		sta	u_charptr+1
+		lda	#0
+		sta	u_xoffs
+		sta	u_column
+		txa
+		eor	#$ff
+		sec
+		adc	#WIDTH
+		sta	u_left
+
+		cpx	#0
+		beq	done
+
+		; todo optimise?
+loop
+		inc	u_column
+
+		lda	u_xoffs
+		clc
+		adc	#6
+		cmp	#8
+		bcc	noc1
+
+		and	#7
+		sta	u_xoffs
+
+		lda	u_charptr
+		clc
+		adc	#8
+		sta	u_charptr
+		bcc	next
+
+		inc	u_charptr+1
+
+		jmp	next
+noc1
+		sta	u_xoffs
+next
+		dex
+		bne	loop
+done
+invalid
+		rts
+		.)
+
+disp_setstyle
+		.(
+		pha
+		jsr	flushbuffer
+		pla
+		sta	style
+		ldx	#0
+		lsr
+		bcc	norev
+
+		ldx	#$fc
+norev
+		stx	revmask
+		lsr
+		lda	#0
+		ror
+		sta	boldflag
+		rts
+		.)
+
+disp_begin_input
+		.(
+		jsr	flushbuffer
+		lda	#0
+		sta	unread_lines
+		lsr	buffermode
+		.)
+disp_refresh_cursor
+		.(
+		inc	1
+		lda	currwindow
+		bne	upper
+lower
+		lda	l_column
+		asl
+		adc	l_column
+		ldy	l_row
+		jmp	common
+upper
+		lda	u_column
+		asl
+		adc	u_column
+		ldy	u_row
+common
+		clc
+		adc	#12
+		asl
+		sta	$d000
+		lda	#0
+		rol
+		sta	$d010
+		tya
+		asl
+		asl
+		asl
+		adc	#$32
+		sta	$d001
+		lda	#1
+		sta	$d015
+		dec	1
+		rts
+		.)
+
+disp_end_input
+		.(
+		asl	buffermode
+		.)
+disp_disable_cursor
+		.(
+		inc	1
+		lda	#0
+		sta	$d015
+		dec	1
+		rts
+		.)
+
+flushbuffer
+		.(
+		ldx	outputpos
+		beq	empty
+
+		ldx	#0
+loop
+		lda	outputbuf,x
+		stx	mod1+1
+		jsr	real_putc_lower
+mod1		ldx	#0
+		inx
+		cpx	outputpos
+		bne	loop
+
+		ldx	#0
+		stx	outputpos
+empty
+		rts
+		.)
+
+		.(
+weird
+		lda	#'?'
++disp_putc
+		cmp	#0
+		bmi	weird
+
+		ldx	currwindow
+		bne	real_putc_upper
+
+		ldx	buffermode
+		bmi	buffered
+
+		jmp	real_putc_lower
+buffered
+		cmp	#13
+		beq	nl
+
+		cmp	#32
+		beq	space
+putbuf
+		dec	spaceleft
+		bmi	wrap
+
+		ldx	outputpos
+		sta	outputbuf,x
+		inx
+		stx	outputpos
+		rts
+nl
+		jsr	flushbuffer
+		lda	#WIDTH
+		sta	spaceleft
+		lda	#13
+		jmp	real_putc_lower
+space
+		jsr	flushbuffer
+		dec	spaceleft
+
+		bmi	spacewrap
+
+		beq	spacewrap2
+
+		lda	#32
+		jmp	real_putc_lower
+spacewrap2
+		lda	#13
+		jsr	real_putc_lower
+spacewrap
+		lda	#WIDTH
+		sta	spaceleft
+		rts
+wrap
+		pha
+		lda	#13
+		jsr	real_putc_lower
+		lda	#WIDTH
+		sec
+		sbc	outputpos
+		sta	spaceleft
+		bne	nolong
+
+		jsr	flushbuffer
+		lda	#WIDTH
+		sta	spaceleft
+nolong
+		pla
+		jmp	putbuf
+		.)
+
+real_putc_upper
+		.(
+upper
+		cmp	#13
+		beq	u_nextline
+
+		ora	boldflag
+		ldx	#>(fontbits >> 3)
+		stx	fontptr+1
+		asl
+		rol	fontptr+1
+		asl
+		rol	fontptr+1
+		asl
+		rol	fontptr+1
+		sta	fontptr
+
+		lda	u_left
+		beq	done
+
+		lda	u_charptr
+		sta	bmptr
+		lda	u_charptr+1
+		sta	bmptr+1
+		lda	u_xoffs
+		jsr	plotchar
+
+		dec	u_left
+		beq	u_nextline
+
+		inc	u_column
+
+		lda	u_xoffs
+		clc
+		adc	#6
+		cmp	#8
+		bcc	noc1
+
+		and	#7
+		sta	u_xoffs
+
+		lda	u_charptr
+		clc
+		adc	#8
+		sta	u_charptr
+		bcc	noc2
+
+		inc	u_charptr+1
+noc2
+		rts
+noc1
+		sta	u_xoffs
+done
+		rts
+u_nextline
+		ldy	u_row
+		iny
+		cpy	upperheight
+		bcs	u_done
+
+		sty	u_row
+		lda	row_lsb,y
+		sta	u_charptr
+		lda	row_msb,y
+		sta	u_charptr+1
+		lda	#0
+		sta	u_xoffs
+		sta	u_column
+		lda	#WIDTH
+		sta	u_left
+u_done
+		rts
+		.)
+
+real_putc_lower
+		.(
+		cmp	#13
+		beq	l_nextline
+
+		ora	boldflag
+		ldx	#>(fontbits >> 3)
+		stx	fontptr+1
+		asl
+		rol	fontptr+1
+		asl
+		rol	fontptr+1
+		asl
+		rol	fontptr+1
+		sta	fontptr
+
+		lda	l_charptr
+		sta	bmptr
+		lda	l_charptr+1
+		sta	bmptr+1
+		lda	l_xoffs
+		jsr	plotchar
+
+		dec	l_left
+		beq	l_nextline
+
+		inc	l_column
+
+		lda	l_xoffs
+		clc
+		adc	#6
+		cmp	#8
+		bcc	noc1
+
+		and	#7
+		sta	l_xoffs
+
+		lda	l_charptr
+		clc
+		adc	#8
+		sta	l_charptr
+		bcc	noc2
+
+		inc	l_charptr+1
+noc2
+		rts
+noc1
+		sta	l_xoffs
+done
+		rts
+l_nextline
+		inc	unread_lines
+
+		ldy	l_row
+		cpy	#24
+		bne	l_noscroll
+
+		lda	row_lsb,y
+		sta	l_charptr
+		lda	row_msb,y
+		sta	l_charptr+1
+		lda	#0
+		sta	l_xoffs
+		sta	l_column
+		lda	#WIDTH
+		sta	l_left
+
+		ldx	upperheight
+loop
+		jsr	copyrow
+		inx
+		cpx	#24
+		bne	loop
+
+		jsr	clearrow
+		jmp	more_if_full
+l_noscroll
+		iny
+		sty	l_row
+		lda	row_lsb,y
+		sta	l_charptr
+		lda	row_msb,y
+		sta	l_charptr+1
+		lda	#0
+		sta	l_xoffs
+		sta	l_column
+		lda	#WIDTH
+		sta	l_left
+
+		jmp	more_if_full
+		.)
+
+disp_rubout
+		.(
+		jsr	stepleft
+		lda	#$20
+		jsr	real_putc_lower
+		;jmp	stepleft
+		.)
+
+stepleft
+		.(
+		ldx	l_column
+		beq	wrap
+
+		dec	l_column
+		inc	l_left
+
+		lda	l_xoffs
+		sec
+		sbc	#6
+		bpl	noc1
+
+		and	#7
+		sta	l_xoffs
+
+		lda	l_charptr
+		bne	noc2
+
+		dec	l_charptr+1
+noc2
+		sec
+		sbc	#8
+		sta	l_charptr
+		rts
+noc1
+		sta	l_xoffs
+		rts
+wrap
+		ldy	l_row
+		beq	bail
+
+		dey
+		sty	l_row
+		lda	row_lsb,y
+		clc
+		adc	#<((WIDTH*6-6) & $fff8)
+		sta	l_charptr
+		lda	row_msb,y
+		adc	#>((WIDTH*6-6) & $fff8)
+		sta	l_charptr+1
+		lda	#((WIDTH*6-6) & 7)
+		sta	l_xoffs
+		lda	#WIDTH-1
+		sta	l_column
+		lda	#1
+		sta	l_left
+bail
+		rts
+		.)
+
+copyrow
+		.(
+		inc	1
+
+		lda	#<320
+		sta	$df07
+		lda	#>320
+		sta	$df08
+
+		; Overwrite the globals table in the REU, since it's always paged-in
+
+		lda	zheader+$d
+		sta	$df04
+		lda	zheader+$c
+		sta	$df05
+		lda	#0
+		sta	$df06
+
+		lda	row_lsb+1,x
+		sta	$df02
+		lda	row_msb+1,x
+		sta	$df03
+
+		lda	#$b0
+		sta	$df01
+
+		lda	row_lsb,x
+		sta	$df02
+		lda	row_msb,x
+		sta	$df03
+
+		lda	#$b1
+		sta	$df01
+
+		lda	#0
+		sta	$df02
+		sta	$df04
+		sta	$df07
+		lda	#1
+		sta	$df08
+
+		dec	1
+		rts
+		.)
+
+plotchar
+		.(
+		sta	mod1+1
+mod1		jmp	(jumptbl_plot)
+		.)
+
+plot0
+		.(
+		ldy	#7
+loop
+		lda	(bmptr),y
+		and	#$03
+		ora	(fontptr),y
+		eor	revmask
+		sta	(bmptr),y
+		dey
+		bpl	loop
+
+		rts
+		.)
+plot2
+		.(
+		ldy	#7
+loop
+		lda	(bmptr),y
+		and	#$c0
+		sta	tempbits
+		lda	(fontptr),y
+		eor	revmask
+		lsr
+		lsr
+		ora	tempbits
+		sta	(bmptr),y
+		dey
+		bpl	loop
+
+		rts
+		.)
+plot4
+		.(
+		ldy	#7
+loop1
+		lda	(bmptr),y
+		and	#$f0
+		sta	tempbits
+		lda	(fontptr),y
+		eor	revmask
+		lsr
+		lsr
+		lsr
+		lsr
+		ora	tempbits
+		sta	(bmptr),y
+		dey
+		bpl	loop1
+
+		lda	bmptr
+		clc
+		adc	#8
+		sta	bmptr
+		bcc	noc1
+
+		inc	bmptr+1
+noc1
+		ldy	#7
+loop2
+		lda	(bmptr),y
+		and	#$3f
+		sta	tempbits
+		lda	(fontptr),y
+		eor	revmask
+		asl
+		asl
+		asl
+		asl
+		ora	tempbits
+		sta	(bmptr),y
+		dey
+		bpl	loop2
+
+		rts
+		.)
+plot6
+		.(
+		ldy	#7
+loop1
+		lda	(bmptr),y
+		and	#$fc
+		sta	tempbits
+		lda	(fontptr),y
+		eor	revmask
+		lsr
+		lsr
+		lsr
+		lsr
+		lsr
+		lsr
+		ora	tempbits
+		sta	(bmptr),y
+		dey
+		bpl	loop1
+
+		lda	bmptr
+		clc
+		adc	#8
+		sta	bmptr
+		bcc	noc1
+
+		inc	bmptr+1
+noc1
+		ldy	#7
+loop2
+		lda	(bmptr),y
+		and	#$0f
+		sta	tempbits
+		lda	(fontptr),y
+		eor	revmask
+		asl
+		asl
+		ora	tempbits
+		sta	(bmptr),y
+		dey
+		bpl	loop2
+
+		rts
+		.)
+
+printhex
+		.(
+		pha
+		lsr
+		lsr
+		lsr
+		lsr
+		jsr	nibble
+		pla
+nibble		clc
+		and	#$0f
+		adc 	#48
+		cmp	#$3a
+		bcc	digit
+		adc 	#6
+digit		jmp 	sendchar	
+		.)
+#if * >= $4800
+#echo dispcode too large
+#endif
+
+logodata
+		.bin	0,0,"zeugma.bin"
+logorows	= (* - logodata) / 256
+
+; ##################### End #####################
+

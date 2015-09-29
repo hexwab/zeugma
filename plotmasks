@@ -1,0 +1,75 @@
+width 9      8      7      6      5      4      3      2      1
+     L  R   L  R   L  R   L  R   L  R   L  R   L  R   L  R   L  R
+0   00 7f  00 ff  01 ff  03 ff  07 ff  0f ff  1f ff  3f ff  7f ff
+1   80 3f  80 7f  80 ff  81 ff  83 ff  87 ff  8f ff  9f ff  bf ff
+2   c0 1f  c0 3f  c0 7f  c0 ff  c1 ff  c3 ff  c7 ff  cf ff  df ff
+3   e0 0f  e0 1f  e0 3f  e0 7f  e0 ff  e1 ff  e3 ff  e7 ff  ef ff
+4   f0 07  f0 0f  f0 1f  f0 3f  f0 7f  f0 ff  f1 ff  f3 ff  f7 ff
+5   f8 03  f8 07  f8 0f  f8 1f  f8 3f  f8 7f  f8 ff  f9 ff  fb ff
+6   fc 01  fc 03  fc 07  fc 0f  fc 1f  fc 3f  fc 7f  fc ff  fd ff
+7   fe 00  fe 01  fe 03  fe 07  fe 0f  fe 1f  fe 3f  fe 7f  fe ff
+^
+--- x offset
+
+R==ff -> onebyte
+
+
+font format:
+
+0: nchars
+1: char height
+for nchars:
+   LSB of pointer
+for nchars:
+   MSB of pointer (bits 0-3)
+   width-1 (bits 4-7)
+
+pointers are char height (width=1..8) or char height*2 (width=9..) bytes
+
+
+maybe second byte of font should be +256 not +height?
+
+
+7654321076543210
+abcdefgh
+       abcdefgh
+
+asl a \2
+sta tmp \3
+adc #0 \2
+
+R9 scan lines per char
+set to 0..7
+R6 vertical displayed reg
+normally 32
+
+mode 3,6,7:
+10(R9)*31(R4) + 2(R5) = 312 lines
+other modes:
+8(R9) * 39(R4) + 0(R5) = 312 lines
+
+sync pos = 34/39
+-> 5 lines before start of frame
+
+1 frame = 312 lines = 39936 2MHz cycles
+= 19968 ($4e00) 1MHz cycles
+
+1 scanline = 64 = $40 1MHz cycles
+
+
+total displayed lines = 32
+line 0: height 2
+lines 1..30: height 8
+line 31: height 6
+
+line 1: set lines/char to n
+line n-1: set lines/char to 8
+
+
+MA0 RA2 RA1 RA0
+
+four possibilities (for max char width of 16)
+onebyte: one byte char (width<=8), fits into one byte of screen
+twobyte: ony byte char (width<=8), split over two bytes of screen
+twobytetwo: two byte char (width>8), fits into two bytes of screen
+threebyte: two byte char (width>8), split over three bytes of screen
