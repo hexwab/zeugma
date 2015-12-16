@@ -10,10 +10,11 @@
 #define OP_PROF 0
 #define OPER_PROF 0
 
+; these are defined on the command line 
 ; 6502 second processor
-#define TUBE 1
+;#define TUBE 1
 ; Master support. mutually exclusive with TUBE
-#define MASTER 0
+;#define MASTER 0
 
 ; OS routines
 oswrch		= $ffee
@@ -32,11 +33,7 @@ osargs		= $ffda
 
 ; ##################### Declarations #####################
 
-#if WIDEHACK
-CLAIMED_WIDTH	= 62
-#else
-CLAIMED_WIDTH	= 40
-#endif
+CLAIMED_WIDTH	= 40 ; FIXME
 
 emptypage	= $c0 ; beyond top of memory
 
@@ -44,39 +41,47 @@ KB_REPEATRATE	= 5
 KB_REPEATDELAY	= 35
 KB_BUFSIZE	= 32
 
-inputbuf	= $0900
-tokbuf		= $0a00
-cachebuf	= tokbuf
-
-
 #if TUBE
-phys2virt_lsb	= $0c00
-phys2virt_msb	= $0800
-callstack_lsb	= $1000
+codestart	= $220
+inputbuf	= $e400
+tokbuf		= $e500
+phys2virt_lsb	= $e600
+phys2virt_msb	= $e700
+callstack_lsb	= $e800
 callstack_msb	= $ec00
 virt2phys	= $f000 ; gotta be 2K-aligned
-PHYS_START	= $44
-PHYS_END	= $ec
+PHYS_START	= $30
+PHYS_END	= $e4
 #else
 
 #if MASTER
+codestart	= $0e00
+inputbuf	= $0900
+tokbuf		= $0a00
 phys2virt_lsb	= $0c00
 phys2virt_msb	= $0c80
-callstack_lsb	= $8000
-callstack_msb	= $8400
-virt2phys	= $8800 ; gotta be 2K-aligned
-PHYS_START	= $44
-PHYS_END	= $80 ; can't discread to swram
+callstack_lsb	= $b000
+callstack_msb	= $b400
+virt2phys	= $b800 ; gotta be 2K-aligned
+PHYS_START	= $3c
+PHYS_END	= $b0
+bouncepage	= $0b00
+
 #else
+codestart	= $1400
+inputbuf	= $0900
+tokbuf		= $0a00
 phys2virt_lsb	= $0c00
 phys2virt_msb	= $0c80
 callstack_lsb	= $0400
-callstack_msb	= $4400
-virt2phys	= $4800
-PHYS_START	= $4c
-PHYS_END	= $7c
+callstack_msb	= $0600
+virt2phys	= $7800
+PHYS_START	= $42
+PHYS_END	= $78
 #endif
 #endif
+
+cachebuf	= tokbuf
 
 
 zheader		= (PHYS_START << 8)
@@ -203,7 +208,7 @@ outputbuf	= $0b11
 bmstart		= $7c00
 
 ; ##################### C64 Program Header #####################
-  		* = $1400
+		* = codestart
 entry
 		jmp	initialise
 
@@ -7018,7 +7023,16 @@ page_request
 no_wrap1
 		stx	next_evict
 noprot
+#if MASTER
+		.(
+;		bpl	notswram
+		stx	realdestaddr
+		lda	#>bouncepage
+notswram	sta	filedestaddr+1	; beeb msb
+		.)
+#else
 		stx	filedestaddr+1	; beeb msb
+#endif
 		ldy	phys2virt_lsb-PHYS_START,x
 		lda	phys2virt_msb-PHYS_START,x
 		bmi	evict_done		; unused page
@@ -7035,14 +7049,22 @@ dirty
 		sta	fileoffset+2	; reu bank
 		sty	fileoffset+1	; reu msb
 
+#if MASTER
+		lda	realdestaddr
+		jsr	tobounce
+#endif
 		;lda #'~'
 		;jsr oswrch
 		;jsr loadprint
 		lda	#1	; write bytes at specified offset
 		jsr	dorw
 
+#if MASTER
+		lda	#>bouncepage
+#else
 ;		dec	filedestaddr+1 ; fix up osgbpb changing address
 		lda	next_evict
+#endif
 		sta	filedestaddr+1 ; fix up osgbpb changing address
 
 		; Mark evicted page as "in reu"
@@ -7064,7 +7086,10 @@ evict_done
 		;beq *
 		lda	#3	; read bytes from specified offset
 		jsr	dorw
-
+#if MASTER
+		lda	realdestaddr
+		jsr	frombounce
+#endif
 		; Update tables
 
 		lda	vaddr
@@ -7193,6 +7218,35 @@ ystore
 		rts
 		.)
 
+
+#if MASTER
+realdestaddr	.byt	0
+
+tobounce	.(
+		sta	loop+2
+		sty	ytmp
+		ldy	#0
+loop
+		lda	!0,Y
+		sta 	bouncepage,Y
+		dey
+		bne	loop
+		ldy	ytmp
+		rts
+ytmp		.byt	0
+		.)
+
+frombounce	.(
+		sta	dest+2
+		ldy	#0
+loop
+		lda 	bouncepage,Y
+dest		sta	!0,Y
+		dey
+		bne	loop
+		rts
+		.)
+#endif
 
 ; ##################### Decoding tables #####################
 

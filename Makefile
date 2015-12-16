@@ -6,7 +6,16 @@ all:	zeugma.ssd
 
 
 zeugma-beeb:			zeugma.s.beeb
-						xa -DWIDEHACK=0 -o $@ -l mapfile.beeb $<
+						xa -DMASTER=0 -DTUBE=0 -o $@ -l mapfile.beeb $<
+
+zeugma-tube:			zeugma.s.beeb
+						xa -DMASTER=0 -DTUBE=1 -o $@ -l mapfile.tube $<
+
+zeugma-master:			zeugma.s.beeb
+						xa -DMASTER=1 -DTUBE=0 -o $@ -l mapfile.master $<
+
+boot:			boot.s
+						xa -o $@ $<
 
 plot2.ssd:			plot
 				rm -f $@
@@ -26,11 +35,10 @@ dis-c64:
 dis-beeb:
 				dxa -g 1400 -a dump -l mapfile.beeb zeugma-beeb
 
-zeugma.ssd:		zeugma-beeb
-						rm -f $@
-						bbcim -a zeugma.ssd zeugma-beeb
-						bbcim -a zeugma.ssd boot
-						bbcim -a zeugma.ssd game
+zeugma.ssd:			zeugma-beeb zeugma-tube zeugma-master boot
+				rm -f $@
+				bbcim -a zeugma.ssd game $+
+				bbcim -boot zeugma.ssd RUN
 
 
 zeugma-c64-reu-${VERSION}.prg:			zeugma.s font.bin zeugma.bin
